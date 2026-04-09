@@ -1,0 +1,221 @@
+{
+    "dataRoles": [
+        {
+            "displayName": "Linhas",
+            "name": "rows",
+            "kind": "Grouping"
+        },
+        {
+            "displayName": "Colunas",
+            "name": "columns",
+            "kind": "Grouping"
+        },
+        {
+            "displayName": "Valores",
+            "name": "values",
+            "kind": "Measure"
+        }
+    ],
+    "objects": {
+        "tableAppearanceBasics": {
+            "properties": {
+                "theme": {
+                    "type": {
+                        "enumeration": [
+                            { "displayName": "Light", "value": "light" },
+                            { "displayName": "Dark", "value": "dark" },
+                            { "displayName": "Minimal", "value": "minimal" }
+                        ]
+                    }
+                },
+                "accentColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "spacingMode": {
+                    "type": {
+                        "enumeration": [
+                            { "displayName": "Compact", "value": "compact" },
+                            { "displayName": "Comfortable", "value": "comfortable" },
+                            { "displayName": "Spacious", "value": "spacious" }
+                        ]
+                    }
+                },
+                "fontSize": {
+                    "type": { "formatting": { "fontSize": true } }
+                }
+            }
+        },
+        "columnsIcons": {
+            "properties": {
+                "showColumnIcons": {
+                    "type": { "bool": true }
+                },
+                "iconPreset": {
+                    "type": {
+                        "enumeration": [
+                            { "displayName": "Minimal", "value": "minimal" },
+                            { "displayName": "Emoji", "value": "emoji" },
+                            { "displayName": "Técnico", "value": "technical" }
+                        ]
+                    }
+                },
+                "columnIconMap": {
+                    "type": { "text": true }
+                },
+                "enableColumnResize": {
+                    "type": { "bool": true }
+                }
+            }
+        },
+        "tableFeatures": {
+            "properties": {
+                "enablePagination": {
+                    "type": { "bool": true }
+                },
+                "pageSize": {
+                    "type": { "numeric": true }
+                },
+                "enableGrouping": {
+                    "type": { "bool": true }
+                },
+                "groupByColumnName": {
+                    "type": { "text": true }
+                },
+                "showHeaderFilter": {
+                    "type": { "bool": true }
+                },
+                "enableEditing": {
+                    "type": { "bool": true }
+                },
+                "showRowNumbers": {
+                    "type": { "bool": true }
+                },
+                "enableRowSelection": {
+                    "type": { "bool": true }
+                }
+            }
+        },
+        "calculatedRows": {
+            "properties": {
+                "enableCalculatedRows": {
+                    "type": { "bool": true }
+                },
+                "enableAutoSum": {
+                    "type": { "bool": true }
+                }
+            }
+        },
+        "layout": {
+            "properties": {
+                "rowHeight": {
+                    "type": { "numeric": true }
+                },
+                "headerHeight": {
+                    "type": { "numeric": true }
+                }
+            }
+        },
+        "colorsAndBorders": {
+            "properties": {
+                "borderColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "borderless": {
+                    "type": { "bool": true }
+                },
+                "striped": {
+                    "type": { "bool": true }
+                },
+                "headerBackgroundColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "headerTextColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "rowAlternateColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "rowAlternateColor2": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "hoverColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                }
+            }
+        },
+        "groupingStyle": {
+            "properties": {
+                "groupedRowsBold": {
+                    "type": { "bool": true }
+                },
+                "groupRowBackgroundColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "groupRowTextColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "selectedGroupBackgroundColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                }
+            }
+        },
+        "totalsStyle": {
+            "properties": {
+                "subtotalRowBackgroundColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "subtotalRowTextColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "summaryRowBackgroundColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "summaryRowTextColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                }
+            }
+        },
+        "dataPoint": {
+            "properties": {
+                "defaultColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "fontSize": {
+                    "type": { "formatting": { "fontSize": true } }
+                }
+            }
+        }
+    },
+    "dataViewMappings": [
+        {
+            "conditions": [
+                {
+                    "rows": {
+                        "min": 0
+                    },
+                    "columns": {
+                        "min": 0
+                    },
+                    "values": {
+                        "min": 0
+                    }
+                }
+            ],
+            "matrix": {
+                "rows": {
+                    "for": { "in": "rows" }
+                },
+                "columns": {
+                    "for": { "in": "columns" }
+                },
+                "values": {
+                    "select": [
+                        { "for": { "in": "values" } }
+                    ]
+                }
+            }
+        }
+    ],
+    "keepAllMetadataColumns": true,
+    "privileges": []
+}
