@@ -16,6 +16,9 @@ export interface IAdvancedColumn {
     dataType: "text" | "number" | "date" | "boolean" | "currency" | "percentage";
     alignment: "left" | "center" | "right";
     format?: string;
+    headerPath?: string[];   // for complex headers (column groups)
+    fontFamily?: string;
+    fontSize?: number;       // px
     backgroundColor?: string;
     textColor?: string;
     bold?: boolean;
@@ -24,6 +27,11 @@ export interface IAdvancedColumn {
     minWidth?: number;       // minimum px when resizing (default: 48)
     customIcon?: string;     // custom SVG icon for column header
 }
+
+type ColumnFormattingOverride = Partial<Pick<IAdvancedColumn, "alignment" | "fontFamily" | "fontSize" | "textColor" | "bold">>;
+
+type RangeFilter = { min?: number | null; max?: number | null };
+type InFilter = { in: string[] };
 
 export interface IAdvancedRow {
     id: string | number;
@@ -140,7 +148,13 @@ export class AdvancedModernTable {
     private suppressNextHeaderClick: boolean = false;
     private activePanelColName: string | null = null;
     private activeConditionalPanelColName: string | null = null;
+    private activeColumnFormatPanelColName: string | null = null;
     private columnWidthsPx: Map<string, number> = new Map();
+    private columnFormattingOverrides: Map<string, ColumnFormattingOverride> = new Map();
+    private columnFormattingBase: Map<string, ColumnFormattingOverride> = new Map();
+    private columnDisplayNameOverrides: Map<string, string> = new Map();
+    private columnDisplayNameBase: Map<string, string> = new Map();
+    private showColumnIconsOverride: boolean | null = null;
     private outsideClickHandler: ((e: MouseEvent) => void) | null = null;
     private activeMatrixMenu: HTMLElement | null = null;
     private matrixColumnCalculationModes: Map<string, MatrixCalcMode> = new Map();
@@ -204,19 +218,20 @@ export class AdvancedModernTable {
 
     private setupOutsideClickHandler(): void {
         this.outsideClickHandler = (e: MouseEvent) => {
-            const panels = this.container.querySelectorAll(".mt-filter-panel, .mt-cond-panel, .mt-matrix-menu");
+            const panels = this.container.querySelectorAll(".mt-filter-panel, .mt-colfmt-panel, .mt-matrix-menu");
             let clickedInsidePanel = false;
             panels.forEach(panel => {
                 if (panel.contains(e.target as Node)) clickedInsidePanel = true;
             });
             if (clickedInsidePanel) return;
 
-            const filterBtns = this.container.querySelectorAll(".mt-filter-btn, .mt-cond-btn, .mt-matrix-menu-trigger");
+            const filterBtns = this.container.querySelectorAll(".mt-filter-btn, .mt-colfmt-btn, .mt-matrix-menu-trigger");
             let clickedBtn = false;
             filterBtns.forEach(btn => { if (btn.contains(e.target as Node)) clickedBtn = true; });
             if (!clickedBtn) {
                 this.closeFilterPanel();
                 this.closeConditionalPanel();
+                this.closeColumnFormatPanel();
                 this.closeMatrixMenu();
             }
         };
@@ -232,7 +247,30 @@ export class AdvancedModernTable {
     // ─── Public Data API ──────────────────────────────────────────────────────
 
     public setColumns(columns: IAdvancedColumn[]): void {
-        this.columns = columns.map((col, idx) => ({ ...col, index: idx }));
+        const normalized = columns.map((col, idx) => ({ ...col, index: idx }));
+
+        normalized.forEach((col) => {
+            this.columnFormattingBase.set(col.name, {
+                alignment: col.alignment,
+                fontFamily: col.fontFamily,
+                fontSize: col.fontSize,
+                textColor: col.textColor,
+                bold: col.bold
+            });
+
+            this.columnDisplayNameBase.set(col.name, col.displayName);
+        });
+
+        this.columns = normalized.map((col, idx) => {
+            const override = this.columnFormattingOverrides.get(col.name);
+            const displayNameOverride = this.columnDisplayNameOverrides.get(col.name);
+            const displayName = displayNameOverride ?? col.displayName;
+            return { ...col, ...override, displayName, index: idx };
+        });
+    }
+
+    private getEffectiveShowColumnIcons(): boolean {
+        return this.showColumnIconsOverride == null ? this.config.showColumnIcons : this.showColumnIconsOverride;
     }
 
     public setData(rows: IAdvancedRow[]): void {
@@ -266,7 +304,8 @@ export class AdvancedModernTable {
     public setFilter(columnName: string, filter: any): void {
         const isEmpty = filter === null || filter === undefined ||
             (typeof filter === "string" && !filter.trim()) ||
-            (typeof filter === "object" && filter.min == null && filter.max == null);
+            (this.isRangeFilter(filter) && filter.min == null && filter.max == null) ||
+            (typeof filter === "object" && !this.isRangeFilter(filter) && !this.isInFilter(filter) && Object.keys(filter).length === 0);
         if (isEmpty) {
             this.config.filters.delete(columnName);
         } else {
@@ -312,7 +351,63 @@ export class AdvancedModernTable {
                     if (!String(rawValue ?? "").toLowerCase().includes(filter.toLowerCase())) {
                         return false;
                     }
-                } else if (filter && typeof filter === "object") {
+                } else if (this.isInFilter(filter)) {
+                    const key = this.getFilterValueKey(rawValue);
+                    if (!filter.in.includes(key)) {
+                        return false;
+                    }
+                } else if (this.isRangeFilter(filter)) {
+                    const num = typeof rawValue === "number" ? rawValue : parseFloat(String(rawValue));
+                    if (!isNaN(num)) {
+                        if (filter.min != null && num < filter.min) return false;
+                        if (filter.max != null && num > filter.max) return false;
+                    }
+                }
+            }
+            return true;
+        });
+    }
+
+    private isRangeFilter(filter: any): filter is RangeFilter {
+        return !!filter && typeof filter === "object" && ("min" in filter || "max" in filter);
+    }
+
+    private isInFilter(filter: any): filter is InFilter {
+        return !!filter && typeof filter === "object" && Array.isArray((filter as any).in);
+    }
+
+    private getFilterValueKey(value: any): string {
+        if (value === null || value === undefined) return "__null__";
+        if (value instanceof Date) return `d:${value.getTime()}`;
+        switch (typeof value) {
+            case "number":
+                return `n:${Object.is(value, -0) ? 0 : value}`;
+            case "boolean":
+                return `b:${value ? 1 : 0}`;
+            case "string":
+                return `s:${value}`;
+            default:
+                return `o:${String(value)}`;
+        }
+    }
+
+    private getRowsFilteredExcluding(excludedColName: string): IAdvancedRow[] {
+        return this.allRows.filter(row => {
+            for (const [colName, filter] of this.config.filters) {
+                if (colName === excludedColName) continue;
+                const col = this.columns.find(c => c.name === colName);
+                if (!col) continue;
+                const rawValue = row.values[col.index];
+                if (typeof filter === "string") {
+                    if (!String(rawValue ?? "").toLowerCase().includes(filter.toLowerCase())) {
+                        return false;
+                    }
+                } else if (this.isInFilter(filter)) {
+                    const key = this.getFilterValueKey(rawValue);
+                    if (!filter.in.includes(key)) {
+                        return false;
+                    }
+                } else if (this.isRangeFilter(filter)) {
                     const num = typeof rawValue === "number" ? rawValue : parseFloat(String(rawValue));
                     if (!isNaN(num)) {
                         if (filter.min != null && num < filter.min) return false;
@@ -580,6 +675,8 @@ export class AdvancedModernTable {
 
     public render(): void {
         this.closeFilterPanel();
+        this.closeConditionalPanel();
+        this.closeColumnFormatPanel();
         this.closeMatrixMenu();
 
         while (this.container.firstChild) {
@@ -588,12 +685,27 @@ export class AdvancedModernTable {
 
         // Root class + theme + spacing
         this.container.className = "mt-root";
-        this.container.classList.add(`mt-theme-${this.config.theme}`, `mt-spacing-${this.config.spacingMode}`, "mt-mode-matrix");
+        this.container.classList.add(`mt-theme-${this.config.theme}`, `mt-spacing-${this.config.spacingMode}`, "mt-mode-grid");
         if (this.config.striped) this.container.classList.add("mt-striped");
         if (this.config.borderless) this.container.classList.add("mt-borderless");
 
         this.applyThemeVariables();
-        this.renderMatrix();
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "mt-table-wrapper";
+
+        const table = document.createElement("div");
+        table.className = "mt-table";
+        table.setAttribute("role", "table");
+
+        const autoColumnWidths = new Map<string, number>();
+        this.renderHeader(table, autoColumnWidths);
+        this.renderTableBody(table, autoColumnWidths);
+
+        wrapper.appendChild(table);
+        this.container.appendChild(wrapper);
+        requestAnimationFrame(() => this.syncComplexHeaderWidths());
+        this.renderPagination();
     }
 
     private buildMatrixData(): {
@@ -1075,10 +1187,108 @@ export class AdvancedModernTable {
 
     // ─── Header ───────────────────────────────────────────────────────────────
 
+    private getComplexHeaderDepth(columns: IAdvancedColumn[]): number {
+        return columns.reduce((max, c) => {
+            const depth = Array.isArray(c.headerPath) ? c.headerPath.length : 0;
+            return Math.max(max, depth);
+        }, 0);
+    }
+
+    private buildComplexHeaderSegments(
+        columns: IAdvancedColumn[],
+        level: number
+    ): Array<{ label: string; colNames: string[]; placeholder: boolean }> {
+        const segments: Array<{ label: string; colNames: string[]; placeholder: boolean; key: string }> = [];
+
+        const getKey = (c: IAdvancedColumn): { key: string; label: string; placeholder: boolean } => {
+            const path = Array.isArray(c.headerPath) ? c.headerPath : null;
+            // Group header rows show only parent segments; the last segment is the leaf header row.
+            if (!path || path.length === 0 || level >= path.length - 1) {
+                return { key: "__placeholder__", label: "", placeholder: true };
+            }
+            const prefix = path.slice(0, level + 1).join("\u001f");
+            return { key: `v:${prefix}`, label: String(path[level] ?? ""), placeholder: false };
+        };
+
+        columns.forEach((col) => {
+            const k = getKey(col);
+            const last = segments[segments.length - 1];
+            if (last && last.key === k.key) {
+                last.colNames.push(col.name);
+            } else {
+                segments.push({ key: k.key, label: k.label, placeholder: k.placeholder, colNames: [col.name] });
+            }
+        });
+
+        return segments.map(({ key: _k, ...rest }) => rest);
+    }
+
+    private syncComplexHeaderWidths(): void {
+        const groupCells = this.container.querySelectorAll<HTMLElement>(".mt-th-group[data-span-cols]");
+        if (!groupCells.length) return;
+
+        const leafWidths = new Map<string, number>();
+        this.container.querySelectorAll<HTMLElement>(".mt-th[data-col]").forEach((el) => {
+            const name = el.getAttribute("data-col");
+            if (!name) return;
+            leafWidths.set(name, el.getBoundingClientRect().width);
+        });
+
+        groupCells.forEach((cell) => {
+            const raw = cell.getAttribute("data-span-cols") || "";
+            const colNames = raw.split("|").map(s => s.trim()).filter(Boolean);
+            let width = 0;
+            colNames.forEach((n) => { width += leafWidths.get(n) ?? 0; });
+            if (width <= 0) return;
+            cell.style.flex = `0 0 ${width}px`;
+            cell.style.width = `${width}px`;
+            cell.style.minWidth = `${width}px`;
+        });
+    }
+
     private renderHeader(table: HTMLElement, autoColumnWidths: Map<string, number>): void {
         const thead = document.createElement("div");
         thead.className = "mt-thead";
         thead.setAttribute("role", "rowgroup");
+
+        const visibleCols = this.columns.filter(c => c.visible);
+        const headerDepth = this.getComplexHeaderDepth(visibleCols);
+
+        if (headerDepth > 1) {
+            for (let level = 0; level < headerDepth - 1; level++) {
+                const groupTr = document.createElement("div");
+                groupTr.className = "mt-tr mt-tr-header mt-tr-header-group";
+                groupTr.setAttribute("role", "row");
+
+                if (this.config.showRowNumbers) {
+                    const th = document.createElement("div");
+                    th.className = "mt-th mt-th-rn mt-th-group mt-th-group-placeholder";
+                    th.setAttribute("role", "columnheader");
+                    groupTr.appendChild(th);
+                }
+
+                if (this.config.enableRowSelection) {
+                    const th = document.createElement("div");
+                    th.className = "mt-th mt-th-select mt-th-group mt-th-group-placeholder";
+                    th.setAttribute("role", "columnheader");
+                    groupTr.appendChild(th);
+                }
+
+                const segments = this.buildComplexHeaderSegments(visibleCols, level);
+                segments.forEach(seg => {
+                    const th = document.createElement("div");
+                    th.className = seg.placeholder
+                        ? "mt-th mt-th-group mt-th-group-placeholder"
+                        : "mt-th mt-th-group";
+                    th.setAttribute("role", "columnheader");
+                    th.setAttribute("data-span-cols", seg.colNames.join("|"));
+                    th.textContent = seg.label;
+                    groupTr.appendChild(th);
+                });
+
+                thead.appendChild(groupTr);
+            }
+        }
 
         const tr = document.createElement("div");
         tr.className = "mt-tr mt-tr-header";
@@ -1136,7 +1346,7 @@ export class AdvancedModernTable {
         inner.className = "mt-th-inner";
 
         // Data type icon
-        if (this.config.showColumnIcons) {
+        if (this.getEffectiveShowColumnIcons()) {
             const iconContainer = document.createElement("span");
             iconContainer.className = "mt-col-icon";
             iconContainer.setAttribute("data-col-name", col.name);
@@ -1154,6 +1364,10 @@ export class AdvancedModernTable {
         const title = document.createElement("span");
         title.className = "mt-col-title";
         title.textContent = col.displayName;
+        title.style.textAlign = col.alignment;
+        if (col.fontFamily) title.style.fontFamily = col.fontFamily;
+        if (col.fontSize) title.style.fontSize = `${col.fontSize}px`;
+        if (col.textColor) title.style.color = col.textColor;
         inner.appendChild(title);
 
         // Sort icon
@@ -1173,7 +1387,7 @@ export class AdvancedModernTable {
                     this.suppressNextHeaderClick = false;
                     return;
                 }
-                if ((e.target as HTMLElement).closest(".mt-filter-btn, .mt-resize-handle")) return;
+                if ((e.target as HTMLElement).closest(".mt-filter-btn, .mt-colfmt-btn, .mt-col-icon, .mt-resize-handle")) return;
                 const newDir: "asc" | "desc" =
                     this.config.sortColumn === col.name && this.config.sortDirection === "asc"
                         ? "desc" : "asc";
@@ -1203,22 +1417,21 @@ export class AdvancedModernTable {
             inner.appendChild(filterBtn);
         }
 
-        if (this.config.enableConditionalFormatting) {
-            const condBtn = document.createElement("button");
-            condBtn.className = "mt-cond-btn";
-            condBtn.setAttribute("aria-label", `Regra de formatação para ${col.displayName}`);
-            if (this.activeConditionalPanelColName === col.name) condBtn.classList.add("mt-cond-active");
-            condBtn.textContent = "fx";
-            condBtn.addEventListener("click", (e) => {
-                e.stopPropagation();
-                if (this.activeConditionalPanelColName === col.name) {
-                    this.closeConditionalPanel();
-                } else {
-                    this.openConditionalPanel(col, th);
-                }
-            });
-            inner.appendChild(condBtn);
-        }
+        const fmtBtn = document.createElement("button");
+        fmtBtn.className = "mt-colfmt-btn";
+        fmtBtn.setAttribute("aria-label", `Formatar coluna ${col.displayName}`);
+        if (this.activeColumnFormatPanelColName === col.name) fmtBtn.classList.add("mt-colfmt-active");
+        fmtBtn.textContent = "⋮";
+        fmtBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+        fmtBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (this.activeColumnFormatPanelColName === col.name) {
+                this.closeColumnFormatPanel();
+            } else {
+                this.openColumnFormatPanel(col, th);
+            }
+        });
+        inner.appendChild(fmtBtn);
 
         th.appendChild(inner);
 
@@ -1235,7 +1448,7 @@ export class AdvancedModernTable {
 
     private startHeaderReorder(e: MouseEvent, colName: string): void {
         if (e.button !== 0) return;
-        if ((e.target as HTMLElement).closest(".mt-filter-btn, .mt-resize-handle")) return;
+        if ((e.target as HTMLElement).closest(".mt-filter-btn, .mt-colfmt-btn, .mt-col-icon, .mt-resize-handle")) return;
 
         this.draggedColumnName = colName;
         this.currentDropColumnName = null;
@@ -1486,6 +1699,8 @@ export class AdvancedModernTable {
             if (col.backgroundColor && !cfStyle.bg) td.style.backgroundColor = col.backgroundColor;
             if (col.textColor && !cfStyle.color) td.style.color = col.textColor;
             if (col.bold) td.style.fontWeight = "600";
+            if (col.fontFamily) td.style.fontFamily = col.fontFamily;
+            if (col.fontSize) td.style.fontSize = `${col.fontSize}px`;
 
             if (row.rowType === "group" && row.groupColumnIndex === col.index) {
                 td.classList.add("mt-group-cell");
@@ -1525,6 +1740,366 @@ export class AdvancedModernTable {
         });
 
         return tr;
+    }
+
+    // ─── Column Formatting Panel ─────────────────────────────────────────────
+
+    private openColumnFormatPanel(col: IAdvancedColumn, triggerEl: HTMLElement): void {
+        this.closeFilterPanel();
+        this.closeMatrixMenu();
+        this.closeColumnFormatPanel();
+        this.activeColumnFormatPanelColName = col.name;
+
+        const panel = document.createElement("div");
+        panel.className = "mt-colfmt-panel";
+
+        const title = document.createElement("div");
+        title.className = "mt-colfmt-panel-title";
+        title.textContent = `Coluna - ${col.displayName}`;
+        panel.appendChild(title);
+
+        const iconsWrap = document.createElement("label");
+        iconsWrap.className = "mt-cond-checkbox";
+        const iconsEnabled = document.createElement("input");
+        iconsEnabled.type = "checkbox";
+        iconsEnabled.checked = this.getEffectiveShowColumnIcons();
+        const iconsEnabledLabel = document.createElement("span");
+        iconsEnabledLabel.textContent = "Mostrar ícones da coluna";
+        iconsWrap.appendChild(iconsEnabled);
+        iconsWrap.appendChild(iconsEnabledLabel);
+        panel.appendChild(iconsWrap);
+
+        const renameLabel = document.createElement("label");
+        renameLabel.className = "mt-cond-color-label";
+        renameLabel.textContent = "Nome da coluna";
+        const renameInput = document.createElement("input");
+        renameInput.className = "mt-cond-input";
+        renameInput.type = "text";
+        renameInput.placeholder = this.columnDisplayNameBase.get(col.name) ?? col.displayName;
+        renameInput.value = this.columnDisplayNameOverrides.get(col.name) ?? col.displayName;
+
+        const alignLabel = document.createElement("label");
+        alignLabel.className = "mt-cond-color-label";
+        alignLabel.textContent = "Alinhamento";
+        const alignSelect = document.createElement("select");
+        alignSelect.className = "mt-cond-select";
+        [
+            { value: "left", text: "Esquerda" },
+            { value: "center", text: "Centralizado" },
+            { value: "right", text: "Direita" }
+        ].forEach(opt => {
+            const o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.text;
+            alignSelect.appendChild(o);
+        });
+        alignSelect.value = col.alignment;
+
+        const boldWrap = document.createElement("label");
+        boldWrap.className = "mt-cond-checkbox";
+        const boldEnabled = document.createElement("input");
+        boldEnabled.type = "checkbox";
+        boldEnabled.checked = !!col.bold;
+        const boldEnabledLabel = document.createElement("span");
+        boldEnabledLabel.textContent = "Negrito";
+        boldWrap.appendChild(boldEnabled);
+        boldWrap.appendChild(boldEnabledLabel);
+
+        const fontLabel = document.createElement("label");
+        fontLabel.className = "mt-cond-color-label";
+        fontLabel.textContent = "Fonte";
+        const fontSelect = document.createElement("select");
+        fontSelect.className = "mt-cond-select";
+        [
+            { value: "", text: "Padrão" },
+            { value: "sans-serif", text: "Sans" },
+            { value: "serif", text: "Serif" },
+            { value: "monospace", text: "Monospace" }
+        ].forEach(opt => {
+            const o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.text;
+            fontSelect.appendChild(o);
+        });
+        fontSelect.value = col.fontFamily || "";
+
+        const sizeLabel = document.createElement("label");
+        sizeLabel.className = "mt-cond-color-label";
+        sizeLabel.textContent = "Tamanho (px)";
+        const sizeInput = document.createElement("input");
+        sizeInput.className = "mt-cond-input";
+        sizeInput.type = "number";
+        sizeInput.placeholder = "Ex.: 13";
+        sizeInput.min = "8";
+        sizeInput.max = "48";
+        if (typeof col.fontSize === "number" && !isNaN(col.fontSize)) {
+            sizeInput.value = String(col.fontSize);
+        }
+
+        const textWrap = document.createElement("label");
+        textWrap.className = "mt-cond-checkbox";
+        const textEnabled = document.createElement("input");
+        textEnabled.type = "checkbox";
+        textEnabled.checked = !!col.textColor;
+        const textEnabledLabel = document.createElement("span");
+        textEnabledLabel.textContent = "Aplicar cor da fonte";
+        textWrap.appendChild(textEnabled);
+        textWrap.appendChild(textEnabledLabel);
+
+        const textLabel = document.createElement("label");
+        textLabel.className = "mt-cond-color-label";
+        textLabel.textContent = "Cor da fonte";
+        const textInput = document.createElement("input");
+        textInput.className = "mt-cond-color";
+        textInput.type = "color";
+        textInput.value = col.textColor || "#111827";
+        textInput.disabled = !textEnabled.checked;
+
+        textEnabled.addEventListener("change", () => {
+            textInput.disabled = !textEnabled.checked;
+        });
+
+        const actions = document.createElement("div");
+        actions.className = "mt-cond-actions";
+
+        const clearBtn = document.createElement("button");
+        clearBtn.className = "mt-btn-ghost";
+        clearBtn.textContent = "Limpar formatação";
+        clearBtn.addEventListener("click", () => {
+            this.clearColumnFormattingForColumn(col.name);
+            this.closeColumnFormatPanel();
+            this.render();
+        });
+
+        const applyBtn = document.createElement("button");
+        applyBtn.className = "mt-btn-primary";
+        applyBtn.textContent = "Aplicar";
+        applyBtn.addEventListener("click", () => {
+            const fontSize = sizeInput.value !== "" ? parseInt(sizeInput.value, 10) : undefined;
+            const override: ColumnFormattingOverride = {
+                alignment: alignSelect.value as IAdvancedColumn["alignment"],
+                fontFamily: fontSelect.value.trim() || undefined,
+                fontSize: fontSize != null && !isNaN(fontSize) ? fontSize : undefined,
+                textColor: textEnabled.checked ? textInput.value : undefined,
+                bold: boldEnabled.checked
+            };
+
+            this.setColumnFormattingForColumn(col.name, override);
+
+            const baseDisplayName = this.columnDisplayNameBase.get(col.name) ?? col.displayName;
+            const newDisplayName = renameInput.value.trim();
+            if (!newDisplayName || newDisplayName === baseDisplayName) {
+                this.columnDisplayNameOverrides.delete(col.name);
+            } else {
+                this.columnDisplayNameOverrides.set(col.name, newDisplayName);
+            }
+
+            this.columns = this.columns.map((c) => {
+                if (c.name !== col.name) return c;
+                return {
+                    ...c,
+                    displayName: this.columnDisplayNameOverrides.get(col.name) ?? baseDisplayName
+                };
+            });
+
+            const desiredIcons = iconsEnabled.checked;
+            this.showColumnIconsOverride = desiredIcons === this.config.showColumnIcons ? null : desiredIcons;
+
+            this.closeColumnFormatPanel();
+            this.render();
+        });
+
+        actions.appendChild(clearBtn);
+        actions.appendChild(applyBtn);
+
+        panel.appendChild(renameLabel);
+        panel.appendChild(renameInput);
+        panel.appendChild(alignLabel);
+        panel.appendChild(alignSelect);
+        panel.appendChild(boldWrap);
+        panel.appendChild(fontLabel);
+        panel.appendChild(fontSelect);
+        panel.appendChild(sizeLabel);
+        panel.appendChild(sizeInput);
+        panel.appendChild(textWrap);
+        panel.appendChild(textLabel);
+        panel.appendChild(textInput);
+        panel.appendChild(actions);
+
+        if (this.config.enableConditionalFormatting) {
+            const condTitle = document.createElement("div");
+            condTitle.className = "mt-colfmt-panel-title";
+            condTitle.textContent = "Regra condicional";
+            panel.appendChild(condTitle);
+
+            const condSelect = document.createElement("select");
+            condSelect.className = "mt-cond-select";
+            const isNumericColumn = col.dataType === "number" || col.dataType === "currency" || col.dataType === "percentage";
+            const conditionOptions: Array<{ value: IConditionalFormat["condition"]; text: string }> = [
+                { value: "contains", text: "Contém" },
+                { value: "equals", text: "Igual a" },
+                { value: "greaterThan", text: "Maior que" },
+                { value: "lessThan", text: "Menor que" }
+            ];
+
+            if (isNumericColumn) {
+                conditionOptions.splice(3, 0, { value: "between", text: "Entre" });
+            }
+
+            conditionOptions.forEach(opt => {
+                const o = document.createElement("option");
+                o.value = opt.value;
+                o.textContent = opt.text;
+                condSelect.appendChild(o);
+            });
+
+            const valueInput = document.createElement("input");
+            valueInput.className = "mt-cond-input";
+            valueInput.type = isNumericColumn ? "number" : "text";
+            valueInput.placeholder = "Valor";
+
+            const valueInput2 = document.createElement("input");
+            valueInput2.className = "mt-cond-input";
+            valueInput2.type = valueInput.type;
+            valueInput2.placeholder = "Até";
+            valueInput2.style.display = "none";
+
+            const syncBetweenUI = () => {
+                const isBetween = condSelect.value === "between";
+                valueInput.placeholder = isBetween ? "De" : "Valor";
+                valueInput2.style.display = isBetween ? "" : "none";
+                if (!isBetween) valueInput2.value = "";
+            };
+
+            condSelect.addEventListener("change", syncBetweenUI);
+            syncBetweenUI();
+
+            const bgLabel = document.createElement("label");
+            bgLabel.className = "mt-cond-color-label";
+            bgLabel.textContent = "Cor de fundo";
+            const bgInput = document.createElement("input");
+            bgInput.className = "mt-cond-color";
+            bgInput.type = "color";
+            bgInput.value = "#dbeafe";
+
+            const condTextWrap = document.createElement("label");
+            condTextWrap.className = "mt-cond-checkbox";
+            const condTextEnabled = document.createElement("input");
+            condTextEnabled.type = "checkbox";
+            const condTextEnabledLabel = document.createElement("span");
+            condTextEnabledLabel.textContent = "Aplicar cor de texto";
+            condTextWrap.appendChild(condTextEnabled);
+            condTextWrap.appendChild(condTextEnabledLabel);
+
+            const condTextLabel = document.createElement("label");
+            condTextLabel.className = "mt-cond-color-label";
+            condTextLabel.textContent = "Cor do texto";
+            const condTextInput = document.createElement("input");
+            condTextInput.className = "mt-cond-color";
+            condTextInput.type = "color";
+            condTextInput.value = "#1e3a8a";
+            condTextInput.disabled = true;
+
+            condTextEnabled.addEventListener("change", () => {
+                condTextInput.disabled = !condTextEnabled.checked;
+            });
+
+            const condActions = document.createElement("div");
+            condActions.className = "mt-cond-actions";
+
+            const clearRuleBtn = document.createElement("button");
+            clearRuleBtn.className = "mt-btn-ghost";
+            clearRuleBtn.textContent = "Limpar regra";
+            clearRuleBtn.addEventListener("click", () => {
+                this.clearConditionalFormatsForColumn(col.name);
+                this.closeColumnFormatPanel();
+                this.render();
+            });
+
+            const applyRuleBtn = document.createElement("button");
+            applyRuleBtn.className = "mt-btn-primary";
+            applyRuleBtn.textContent = "Aplicar";
+            applyRuleBtn.addEventListener("click", () => {
+                const condition = condSelect.value as IConditionalFormat["condition"];
+                const value = this.parseConditionalValue(valueInput.value, col.dataType, condition);
+                if (value === null || value === "") return;
+
+                const value2 = condition === "between"
+                    ? this.parseConditionalValue(valueInput2.value, col.dataType, condition)
+                    : undefined;
+                if (condition === "between" && (value2 === null || value2 === "")) return;
+
+                this.setConditionalFormatForColumn({
+                    columnName: col.name,
+                    condition,
+                    value,
+                    value2,
+                    backgroundColor: bgInput.value,
+                    textColor: condTextEnabled.checked ? condTextInput.value : "",
+                    bold: false
+                });
+
+                this.closeColumnFormatPanel();
+                this.render();
+            });
+
+            condActions.appendChild(clearRuleBtn);
+            condActions.appendChild(applyRuleBtn);
+
+            panel.appendChild(condSelect);
+            panel.appendChild(valueInput);
+            panel.appendChild(valueInput2);
+            panel.appendChild(bgLabel);
+            panel.appendChild(bgInput);
+            panel.appendChild(condTextWrap);
+            panel.appendChild(condTextLabel);
+            panel.appendChild(condTextInput);
+            panel.appendChild(condActions);
+        }
+
+        this.container.style.position = "relative";
+        const containerRect = this.container.getBoundingClientRect();
+        const triggerRect = triggerEl.getBoundingClientRect();
+        panel.style.top = `${triggerRect.bottom - containerRect.top}px`;
+        panel.style.left = `${triggerRect.left - containerRect.left}px`;
+
+        this.container.appendChild(panel);
+
+        requestAnimationFrame(() => {
+            const panelRect = panel.getBoundingClientRect();
+            if (panelRect.right > containerRect.right) {
+                const newLeft = (triggerRect.left - containerRect.left) - (panelRect.right - containerRect.right) - 4;
+                panel.style.left = `${Math.max(0, newLeft)}px`;
+            }
+        });
+    }
+
+    private closeColumnFormatPanel(): void {
+        const existing = this.container.querySelector(".mt-colfmt-panel");
+        if (existing) existing.remove();
+        this.activeColumnFormatPanelColName = null;
+    }
+
+    private clearColumnFormattingForColumn(columnName: string): void {
+        this.columnFormattingOverrides.delete(columnName);
+        const base = this.columnFormattingBase.get(columnName);
+
+        this.columns = this.columns.map((c) => {
+            if (c.name !== columnName) return c;
+            return {
+                ...c,
+                alignment: (base?.alignment ?? c.alignment) as IAdvancedColumn["alignment"],
+                fontFamily: base?.fontFamily,
+                fontSize: base?.fontSize,
+                textColor: base?.textColor,
+                bold: base?.bold
+            };
+        });
+    }
+
+    private setColumnFormattingForColumn(columnName: string, override: ColumnFormattingOverride): void {
+        this.columnFormattingOverrides.set(columnName, override);
+        this.columns = this.columns.map((c) => (c.name === columnName ? { ...c, ...override } : c));
     }
 
     private applyColWidth(el: HTMLElement, col: IAdvancedColumn, autoColumnWidths?: Map<string, number>): void {
@@ -1697,6 +2272,7 @@ export class AdvancedModernTable {
 
     private openFilterPanel(col: IAdvancedColumn, triggerEl: HTMLElement): void {
         this.closeConditionalPanel();
+        this.closeColumnFormatPanel();
         this.closeFilterPanel();
         this.activePanelColName = col.name;
 
@@ -1711,7 +2287,169 @@ export class AdvancedModernTable {
         title.textContent = col.displayName;
         panel.appendChild(title);
 
+        let rangeFocusTarget: HTMLInputElement | null = null;
+
+        let mode: "values" | "range" = (isNumeric && this.isRangeFilter(currentFilter)) ? "range" : "values";
+
+        let modeSelect: HTMLSelectElement | null = null;
         if (isNumeric) {
+            const modeRow = document.createElement("div");
+            modeRow.className = "mt-filter-mode";
+
+            modeSelect = document.createElement("select");
+            modeSelect.className = "mt-cond-select";
+
+            const optValues = document.createElement("option");
+            optValues.value = "values";
+            optValues.textContent = "Valores";
+
+            const optRange = document.createElement("option");
+            optRange.value = "range";
+            optRange.textContent = "Intervalo";
+
+            modeSelect.appendChild(optValues);
+            modeSelect.appendChild(optRange);
+            modeSelect.value = mode;
+
+            modeRow.appendChild(modeSelect);
+            panel.appendChild(modeRow);
+        }
+
+        // Values (basic) filtering — multi-select with search.
+        const valuesSection = document.createElement("div");
+        valuesSection.className = "mt-filter-values-section";
+
+        const searchInput = document.createElement("input");
+        searchInput.type = "text";
+        searchInput.className = "mt-filter-search";
+        searchInput.placeholder = "Buscar…";
+        valuesSection.appendChild(searchInput);
+
+        const selectActions = document.createElement("div");
+        selectActions.className = "mt-filter-select-actions";
+
+        const selectAllBtn = document.createElement("button");
+        selectAllBtn.type = "button";
+        selectAllBtn.className = "mt-btn-ghost";
+        selectAllBtn.textContent = "Selecionar tudo";
+
+        const deselectAllBtn = document.createElement("button");
+        deselectAllBtn.type = "button";
+        deselectAllBtn.className = "mt-btn-ghost";
+        deselectAllBtn.textContent = "Desmarcar tudo";
+
+        selectActions.appendChild(selectAllBtn);
+        selectActions.appendChild(deselectAllBtn);
+        valuesSection.appendChild(selectActions);
+
+        const valuesList = document.createElement("div");
+        valuesList.className = "mt-filter-values";
+        valuesSection.appendChild(valuesList);
+
+        type FilterValueItem = { key: string; raw: any; label: string };
+        const contextRows = this.getRowsFilteredExcluding(col.name);
+        const distinct = new Map<string, FilterValueItem>();
+        contextRows.forEach((r) => {
+            const raw = r.values[col.index];
+            const key = this.getFilterValueKey(raw);
+            if (distinct.has(key)) return;
+            const label = (raw === null || raw === undefined || raw === "")
+                ? "(Vazio)"
+                : this.formatCellValue(raw, col);
+            distinct.set(key, { key, raw, label });
+        });
+
+        const items = Array.from(distinct.values());
+        items.sort((a, b) => {
+            if (isNumeric) {
+                const an = typeof a.raw === "number" ? a.raw : parseFloat(String(a.raw));
+                const bn = typeof b.raw === "number" ? b.raw : parseFloat(String(b.raw));
+                if (!isNaN(an) && !isNaN(bn)) return an - bn;
+            }
+            return String(a.label).localeCompare(String(b.label), "pt-BR");
+        });
+
+        const allKeys = items.map(i => i.key);
+        const selectedKeys = new Set<string>();
+        if (this.isInFilter(currentFilter)) {
+            currentFilter.in.forEach((k: string) => selectedKeys.add(k));
+        } else {
+            allKeys.forEach(k => selectedKeys.add(k));
+        }
+
+        const applySelectionFilter = () => {
+            if (selectedKeys.size === allKeys.length) {
+                this.setFilter(col.name, null);
+            } else {
+                this.setFilter(col.name, { in: Array.from(selectedKeys) });
+            }
+            this.refreshBodyAndPagination();
+        };
+
+        const renderValueList = () => {
+            while (valuesList.firstChild) valuesList.removeChild(valuesList.firstChild);
+
+            const q = (searchInput.value || "").toLowerCase();
+            const visibleItems = q
+                ? items.filter(i => String(i.label).toLowerCase().includes(q))
+                : items;
+
+            if (!visibleItems.length) {
+                const empty = document.createElement("div");
+                empty.className = "mt-filter-empty";
+                empty.textContent = "Nenhum valor";
+                valuesList.appendChild(empty);
+                return;
+            }
+
+            visibleItems.forEach((it) => {
+                const row = document.createElement("label");
+                row.className = "mt-filter-item";
+
+                const cb = document.createElement("input");
+                cb.type = "checkbox";
+                cb.className = "mt-checkbox";
+                cb.checked = selectedKeys.has(it.key);
+                cb.addEventListener("change", () => {
+                    if (cb.checked) selectedKeys.add(it.key);
+                    else selectedKeys.delete(it.key);
+                    applySelectionFilter();
+                });
+
+                const txt = document.createElement("span");
+                txt.className = "mt-filter-item-label";
+                txt.textContent = it.label;
+
+                row.appendChild(cb);
+                row.appendChild(txt);
+                valuesList.appendChild(row);
+            });
+        };
+
+        searchInput.addEventListener("input", () => renderValueList());
+
+        selectAllBtn.addEventListener("click", () => {
+            selectedKeys.clear();
+            allKeys.forEach(k => selectedKeys.add(k));
+            applySelectionFilter();
+            renderValueList();
+        });
+
+        deselectAllBtn.addEventListener("click", () => {
+            selectedKeys.clear();
+            applySelectionFilter();
+            renderValueList();
+        });
+
+        renderValueList();
+        panel.appendChild(valuesSection);
+
+        // Range (advanced) filtering for numeric columns.
+        let rangeSection: HTMLElement | null = null;
+        if (isNumeric) {
+            rangeSection = document.createElement("div");
+            rangeSection.className = "mt-filter-range-section";
+
             const rangeRow = document.createElement("div");
             rangeRow.className = "mt-filter-range";
 
@@ -1719,7 +2457,8 @@ export class AdvancedModernTable {
             minInput.type = "number";
             minInput.className = "mt-filter-input";
             minInput.placeholder = "Mínimo";
-            if (currentFilter?.min != null) minInput.value = String(currentFilter.min);
+            if (this.isRangeFilter(currentFilter) && currentFilter.min != null) minInput.value = String(currentFilter.min);
+            rangeFocusTarget = minInput;
 
             const sep = document.createElement("span");
             sep.className = "mt-filter-sep";
@@ -1729,69 +2468,119 @@ export class AdvancedModernTable {
             maxInput.type = "number";
             maxInput.className = "mt-filter-input";
             maxInput.placeholder = "Máximo";
-            if (currentFilter?.max != null) maxInput.value = String(currentFilter.max);
+            if (this.isRangeFilter(currentFilter) && currentFilter.max != null) maxInput.value = String(currentFilter.max);
 
             rangeRow.appendChild(minInput);
             rangeRow.appendChild(sep);
             rangeRow.appendChild(maxInput);
-            panel.appendChild(rangeRow);
+            rangeSection.appendChild(rangeRow);
 
             const actions = document.createElement("div");
             actions.className = "mt-filter-actions";
 
             const clearBtn = document.createElement("button");
+            clearBtn.type = "button";
             clearBtn.className = "mt-btn-ghost";
             clearBtn.textContent = "Limpar";
             clearBtn.addEventListener("click", () => {
+                minInput.value = "";
+                maxInput.value = "";
                 this.setFilter(col.name, null);
-                this.closeFilterPanel();
-                this.render();
+                this.refreshBodyAndPagination();
             });
 
             const applyBtn = document.createElement("button");
+            applyBtn.type = "button";
             applyBtn.className = "mt-btn-primary";
             applyBtn.textContent = "Aplicar";
             applyBtn.addEventListener("click", () => {
                 const min = minInput.value !== "" ? parseFloat(minInput.value) : null;
                 const max = maxInput.value !== "" ? parseFloat(maxInput.value) : null;
                 this.setFilter(col.name, { min, max });
-                this.closeFilterPanel();
-                this.render();
+                this.refreshBodyAndPagination();
             });
 
             actions.appendChild(clearBtn);
             actions.appendChild(applyBtn);
-            panel.appendChild(actions);
-        } else {
-            // Text search
-            const searchInput = document.createElement("input");
-            searchInput.type = "text";
-            searchInput.className = "mt-filter-search";
-            searchInput.placeholder = `Buscar em ${col.displayName}…`;
-            if (typeof currentFilter === "string") searchInput.value = currentFilter;
+            rangeSection.appendChild(actions);
 
-            searchInput.addEventListener("input", (e) => {
-                const val = (e.target as HTMLInputElement).value;
-                this.setFilter(col.name, val || null);
-                this.refreshDataView();
-            });
-            panel.appendChild(searchInput);
-
-            if (currentFilter) {
-                const clearBtn = document.createElement("button");
-                clearBtn.className = "mt-filter-clear-btn";
-                clearBtn.textContent = "✕ Limpar filtro";
-                clearBtn.addEventListener("click", () => {
-                    this.setFilter(col.name, null);
-                    searchInput.value = "";
-                    this.refreshDataView();
-                    searchInput.focus();
-                });
-                panel.appendChild(clearBtn);
-            }
-
-            setTimeout(() => searchInput.focus(), 10);
+            panel.appendChild(rangeSection);
         }
+
+        // Sort options
+        const sortBox = document.createElement("div");
+        sortBox.className = "mt-filter-sort";
+
+        const sortAscBtn = document.createElement("button");
+        sortAscBtn.type = "button";
+        sortAscBtn.className = "mt-filter-sort-btn";
+        sortAscBtn.textContent = isNumeric ? "Ordenar crescente" : "Ordenar A → Z";
+
+        const sortDescBtn = document.createElement("button");
+        sortDescBtn.type = "button";
+        sortDescBtn.className = "mt-filter-sort-btn";
+        sortDescBtn.textContent = isNumeric ? "Ordenar decrescente" : "Ordenar Z → A";
+
+        const syncSortButtons = () => {
+            const isThisCol = this.config.sortColumn === col.name;
+            sortAscBtn.classList.toggle("mt-filter-sort-active", isThisCol && this.config.sortDirection === "asc");
+            sortDescBtn.classList.toggle("mt-filter-sort-active", isThisCol && this.config.sortDirection === "desc");
+        };
+
+        sortAscBtn.addEventListener("click", () => {
+            this.setSorting(col.name, "asc");
+            this.config.currentPage = 1;
+            this.refreshBodyAndPagination();
+            syncSortButtons();
+        });
+
+        sortDescBtn.addEventListener("click", () => {
+            this.setSorting(col.name, "desc");
+            this.config.currentPage = 1;
+            this.refreshBodyAndPagination();
+            syncSortButtons();
+        });
+
+        sortBox.appendChild(sortAscBtn);
+        sortBox.appendChild(sortDescBtn);
+        panel.appendChild(sortBox);
+
+        const syncModeUI = () => {
+            valuesSection.style.display = mode === "values" ? "" : "none";
+            if (rangeSection) rangeSection.style.display = mode === "range" ? "" : "none";
+        };
+
+        if (modeSelect) {
+            modeSelect.addEventListener("change", () => {
+                mode = modeSelect!.value as any;
+
+                // Switching modes clears the previous filter type for this column.
+                const existing = this.config.filters.get(col.name);
+                if (mode === "values" && this.isRangeFilter(existing)) {
+                    this.setFilter(col.name, null);
+                    selectedKeys.clear();
+                    allKeys.forEach(k => selectedKeys.add(k));
+                    this.refreshBodyAndPagination();
+                    renderValueList();
+                }
+                if (mode === "range" && this.isInFilter(existing)) {
+                    this.setFilter(col.name, null);
+                    this.refreshBodyAndPagination();
+                }
+
+                syncModeUI();
+            });
+        }
+
+        syncModeUI();
+        syncSortButtons();
+        setTimeout(() => {
+            if (mode === "range" && rangeFocusTarget) {
+                rangeFocusTarget.focus();
+            } else {
+                searchInput.focus();
+            }
+        }, 10);
 
         // Position relative to container
         this.container.style.position = "relative";
@@ -1821,6 +2610,7 @@ export class AdvancedModernTable {
     private openConditionalPanel(col: IAdvancedColumn, triggerEl: HTMLElement): void {
         this.closeFilterPanel();
         this.closeConditionalPanel();
+        this.closeColumnFormatPanel();
         this.activeConditionalPanelColName = col.name;
 
         const panel = document.createElement("div");
@@ -1833,12 +2623,19 @@ export class AdvancedModernTable {
 
         const condSelect = document.createElement("select");
         condSelect.className = "mt-cond-select";
-        [
+        const isNumericColumn = col.dataType === "number" || col.dataType === "currency" || col.dataType === "percentage";
+        const conditionOptions: Array<{ value: IConditionalFormat["condition"]; text: string }> = [
             { value: "contains", text: "Contém" },
             { value: "equals", text: "Igual a" },
             { value: "greaterThan", text: "Maior que" },
             { value: "lessThan", text: "Menor que" }
-        ].forEach(opt => {
+        ];
+
+        if (isNumericColumn) {
+            conditionOptions.splice(3, 0, { value: "between", text: "Entre" });
+        }
+
+        conditionOptions.forEach(opt => {
             const o = document.createElement("option");
             o.value = opt.value;
             o.textContent = opt.text;
@@ -1851,6 +2648,22 @@ export class AdvancedModernTable {
             ? "number"
             : "text";
         valueInput.placeholder = "Valor";
+
+        const valueInput2 = document.createElement("input");
+        valueInput2.className = "mt-cond-input";
+        valueInput2.type = valueInput.type;
+        valueInput2.placeholder = "Até";
+        valueInput2.style.display = "none";
+
+        const syncBetweenUI = () => {
+            const isBetween = condSelect.value === "between";
+            valueInput.placeholder = isBetween ? "De" : "Valor";
+            valueInput2.style.display = isBetween ? "" : "none";
+            if (!isBetween) valueInput2.value = "";
+        };
+
+        condSelect.addEventListener("change", syncBetweenUI);
+        syncBetweenUI();
 
         const bgLabel = document.createElement("label");
         bgLabel.className = "mt-cond-color-label";
@@ -1902,10 +2715,16 @@ export class AdvancedModernTable {
             const value = this.parseConditionalValue(valueInput.value, col.dataType, condition);
             if (value === null || value === "") return;
 
+            const value2 = condition === "between"
+                ? this.parseConditionalValue(valueInput2.value, col.dataType, condition)
+                : undefined;
+            if (condition === "between" && (value2 === null || value2 === "")) return;
+
             this.setConditionalFormatForColumn({
                 columnName: col.name,
                 condition,
                 value,
+                value2,
                 backgroundColor: bgInput.value,
                 textColor: textEnabled.checked ? textInput.value : "",
                 bold: false
@@ -1916,6 +2735,7 @@ export class AdvancedModernTable {
 
         panel.appendChild(condSelect);
         panel.appendChild(valueInput);
+        panel.appendChild(valueInput2);
         panel.appendChild(bgLabel);
         panel.appendChild(bgInput);
         panel.appendChild(textWrap);
@@ -1993,6 +2813,8 @@ export class AdvancedModernTable {
                 cell.style.width = `${newWidth}px`;
                 cell.style.minWidth = `${newWidth}px`;
             });
+
+            this.syncComplexHeaderWidths();
         };
 
         const onMouseUp = () => {
@@ -2225,6 +3047,26 @@ export class AdvancedModernTable {
         this.render();
     }
 
+    private refreshBodyAndPagination(): void {
+        const table = this.container.querySelector<HTMLElement>(".mt-table");
+        if (!table) {
+            this.render();
+            return;
+        }
+
+        const existingTbody = table.querySelector<HTMLElement>(".mt-tbody");
+        if (existingTbody) existingTbody.remove();
+
+        const autoColumnWidths = new Map<string, number>();
+        this.renderTableBody(table, autoColumnWidths);
+
+        const existingPag = this.container.querySelector<HTMLElement>(".mt-pagination");
+        if (existingPag) existingPag.remove();
+        this.renderPagination();
+
+        this.refreshHeaderIndicators();
+    }
+
     private refreshHeaderIndicators(): void {
         this.columns.forEach(col => {
             if (!col.visible) return;
@@ -2234,7 +3076,7 @@ export class AdvancedModernTable {
 
             const sortIcon = th.querySelector<HTMLElement>(".mt-sort-icon");
             if (sortIcon) {
-                sortIcon.textContent = this.getSortIconText(col.name);
+                sortIcon.innerHTML = this.getSortIconSVG(col.name);
                 sortIcon.classList.toggle("mt-sort-active", this.config.sortColumn === col.name);
             }
 
@@ -2242,7 +3084,7 @@ export class AdvancedModernTable {
             if (filterBtn) {
                 const hasFilter = this.config.filters.has(col.name);
                 filterBtn.classList.toggle("mt-filter-active", hasFilter);
-                filterBtn.textContent = this.getFilterIconText(hasFilter);
+                filterBtn.innerHTML = this.getFilterIconSVG(hasFilter);
             }
         });
     }

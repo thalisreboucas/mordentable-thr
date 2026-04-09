@@ -47,6 +47,10 @@ export class Visual implements IVisual {
             const dataView = options.dataViews?.[0];
 
             const extracted = this.getRenderableData(dataView);
+            if (dataView && (extracted.columns.length === 0 || extracted.rows.length === 0)) {
+                this.renderEmptyState("Nenhum dado para exibir. Adicione campos em Linhas, Colunas ou Valores.");
+                return;
+            }
             const config = this.buildTableConfig(
                 columnsIconsConfig,
                 tableFeaturesConfig,
@@ -75,6 +79,17 @@ export class Visual implements IVisual {
             errorDiv.appendChild(msg);
             this.target.appendChild(errorDiv);
         }
+    }
+
+    private renderEmptyState(message: string): void {
+        while (this.target.firstChild) {
+            this.target.removeChild(this.target.firstChild);
+        }
+
+        const wrap = document.createElement("div");
+        wrap.style.cssText = "padding:16px;color:#6b7280;font-family:system-ui,sans-serif;font-size:13px";
+        wrap.textContent = message;
+        this.target.appendChild(wrap);
     }
 
     // ─── Config Builder ──────────────────────────────────────────────────────
@@ -354,20 +369,32 @@ export class Visual implements IVisual {
     // ─── Data Extraction ──────────────────────────────────────────────────────
 
     private getRenderableData(dataView?: DataView): { columns: IAdvancedColumn[]; rows: IAdvancedRow[] } {
-        if (dataView) {
-            const extracted = this.extractData(dataView);
-            if (extracted.columns.length > 0 && extracted.rows.length > 0) {
-                return extracted;
-            }
+        if (!dataView) {
+            return { columns: this.getExampleColumns(), rows: this.getExampleRows() };
         }
-        return { columns: this.getExampleColumns(), rows: this.getExampleRows() };
+
+        // When a DataView is present, never fall back to example rows.
+        // Example data is only for the “no data connected” scenario.
+        return this.extractData(dataView);
     }
 
     private extractData(dataView: DataView): { columns: IAdvancedColumn[]; rows: IAdvancedRow[] } {
         const matrix = (dataView as any)?.matrix;
         if (matrix) {
-            return this.extractMatrixData(matrix);
+            const extracted = this.extractMatrixData(matrix);
+            if (extracted.columns.length > 0 && extracted.rows.length > 0) {
+                return extracted;
+            }
         }
+
+        const single = (dataView as any)?.single;
+        if (single && "value" in single) {
+            const extracted = this.extractSingleData(single, dataView);
+            if (extracted.columns.length > 0 && extracted.rows.length > 0) {
+                return extracted;
+            }
+        }
+
         if (dataView.table?.columns && dataView.table?.rows) {
             return {
                 columns: this.extractTableColumns(dataView.table),
@@ -380,21 +407,114 @@ export class Visual implements IVisual {
         return { columns: [], rows: [] };
     }
 
+    private extractSingleData(single: any, dataView: DataView): { columns: IAdvancedColumn[]; rows: IAdvancedRow[] } {
+        const metaCol = dataView?.metadata?.columns?.[0];
+        const name = metaCol?.queryName || metaCol?.displayName || "value";
+        const displayName = metaCol?.displayName || "Valor";
+
+        const col: IAdvancedColumn = {
+            name,
+            displayName,
+            index: 0,
+            width: 100,
+            sortable: true,
+            filterable: true,
+            visible: true,
+            editable: false,
+            resizable: true,
+            dataType: this.getDataType(metaCol || {}),
+            alignment: this.getAlignment(metaCol || {}),
+            format: metaCol?.format || undefined
+        };
+
+        const row: IAdvancedRow = {
+            id: 0,
+            values: [single.value],
+            isCalculated: false
+        };
+
+        return { columns: [col], rows: [row] };
+    }
+
     private extractMatrixData(matrix: any): { columns: IAdvancedColumn[]; rows: IAdvancedRow[] } {
-        const rowLeaves = this.collectMatrixLeaves(matrix?.rows?.root);
-        const colLeaves = this.collectMatrixLeaves(matrix?.columns?.root);
+        const rowRoot = matrix?.rows?.root;
+        const colRoot = matrix?.columns?.root;
+
+        let rowLeaves = this.collectMatrixLeaves(rowRoot);
+        const colLeaves = this.collectMatrixLeaves(colRoot);
+        const valueSources: any[] = Array.isArray(matrix?.valueSources) ? matrix.valueSources : [];
+
+        const rowLevelSources: any[] = Array.isArray(matrix?.rows?.levels)
+            ? matrix.rows.levels.map((lvl: any) => Array.isArray(lvl?.sources) ? lvl.sources[0] : null)
+            : [];
+        const colLevelSources: any[] = Array.isArray(matrix?.columns?.levels)
+            ? matrix.columns.levels.map((lvl: any) => Array.isArray(lvl?.sources) ? lvl.sources[0] : null)
+            : [];
+
+        const hasMeasures = valueSources.length > 0;
+
+        // Columns-only (no rows, no measures): render column labels as a simple grid list
+        if (!hasMeasures && colLeaves.length > 0 && rowLeaves.length === 0) {
+            const maxColPath = colLeaves.reduce((max, leaf) => Math.max(max, leaf.path.length), 0);
+            const colDepth = Math.max(1, maxColPath);
+
+            const columns: IAdvancedColumn[] = [];
+            for (let i = 0; i < colDepth; i++) {
+                const src = colLevelSources[i];
+                columns.push({
+                    name: src?.queryName || `col_${i}`,
+                    displayName: src?.displayName || (colDepth === 1 ? "Coluna" : `Coluna ${i + 1}`),
+                    index: i,
+                    width: colDepth === 1 ? 100 : Math.max(20, 100 / colDepth),
+                    sortable: true,
+                    filterable: true,
+                    visible: true,
+                    editable: false,
+                    resizable: true,
+                    dataType: src ? this.getDataType(src) : "text",
+                    alignment: "left",
+                    format: src?.format || undefined
+                });
+            }
+
+            const rows: IAdvancedRow[] = colLeaves.map((leaf, idx) => {
+                const values: any[] = [];
+                const pathValues = leaf.path.slice(0, colDepth);
+                for (let i = 0; i < colDepth; i++) values.push(pathValues[i] ?? "");
+                return { id: idx, values, isCalculated: false };
+            });
+
+            return { columns, rows };
+        }
+
+        // Measures-only (Valores) with no row fields (Linhas) may come as an unlabeled
+        // leaf node somewhere in the row hierarchy. Find any node that actually carries
+        // intersection values and treat it as a single row.
+        if (!rowLeaves.length && (hasMeasures || colLeaves.length > 0)) {
+            const valuesNode =
+                this.findFirstMatrixNodeWithValues(rowRoot) ??
+                this.findFirstMatrixNodeWithValues(colRoot);
+
+            if (valuesNode) {
+                rowLeaves = [{ path: [], node: valuesNode, label: "" }];
+            }
+        }
 
         if (!rowLeaves.length) {
             return { columns: [], rows: [] };
         }
 
-        const rowDepth = Math.max(1, this.getMatrixDepth(matrix?.rows?.root));
+        const maxRowPath = rowLeaves.reduce((max, leaf) => Math.max(max, leaf.path.length), 0);
+        const rowDepth = Math.max(maxRowPath, rowLevelSources.length);
+
+        const valueAreaWidth = rowDepth > 0 ? 55 : 100;
 
         const columns: IAdvancedColumn[] = [];
         for (let i = 0; i < rowDepth; i++) {
+            const src = rowLevelSources[i];
             columns.push({
-                name: `row_${i}`,
-                displayName: rowDepth === 1 ? "Linha" : `Linha ${i + 1}`,
+                name: src?.queryName || `row_${i}`,
+                displayName: src?.displayName || (rowDepth === 1 ? "Linha" : `Linha ${i + 1}`),
                 index: i,
                 width: rowDepth === 1 ? 45 : Math.max(20, 45 / rowDepth),
                 sortable: true,
@@ -402,26 +522,47 @@ export class Visual implements IVisual {
                 visible: true,
                 editable: true,
                 resizable: true,
-                dataType: "text",
+                dataType: src ? this.getDataType(src) : "text",
                 alignment: "left"
             });
         }
 
-        const valueColumns = colLeaves.length > 0 ? colLeaves : [{ label: "Valor", node: null }];
+        // Rows-only (no measures, no column groups): behave like a simple table/grid
+        // with only the row label columns.
+        const valueColumns = (!hasMeasures && colLeaves.length === 0)
+            ? []
+            : (colLeaves.length > 0
+                ? colLeaves
+                : (valueSources.length > 0
+                    ? valueSources.map((src, idx) => ({
+                        label: String(src?.displayName ?? src?.queryName ?? `Valor ${idx + 1}`),
+                        node: null,
+                        source: src
+                    }))
+                    : [{ label: "Valor", node: null }]));
 
-        valueColumns.forEach((leaf, index) => {
+        valueColumns.forEach((leaf: any, index: number) => {
+            const src = leaf?.source;
+            const inferredType = src ? this.getDataType(src) : "number";
+            const dataType = (["text", "number", "date", "boolean", "currency", "percentage"].includes(inferredType)
+                ? inferredType
+                : "number") as DataType;
+            const alignment = src ? this.getAlignment(src) : "right";
+
             columns.push({
-                name: `value_${index}`,
-                displayName: leaf.label || `Valor ${index + 1}`,
+                name: src?.queryName || `value_${index}`,
+                displayName: leaf.label || src?.displayName || `Valor ${index + 1}`,
+                headerPath: Array.isArray(leaf?.path) ? leaf.path : undefined,
                 index: rowDepth + index,
-                width: valueColumns.length > 0 ? Math.max(20, 55 / valueColumns.length) : 55,
+                width: valueColumns.length > 0 ? Math.max(20, valueAreaWidth / valueColumns.length) : valueAreaWidth,
                 sortable: true,
                 filterable: true,
                 visible: true,
                 editable: true,
                 resizable: true,
-                dataType: "number",
-                alignment: "right"
+                dataType,
+                alignment,
+                format: src?.format || undefined
             });
         });
 
@@ -433,7 +574,11 @@ export class Visual implements IVisual {
                 values.push(pathValues[i] ?? "");
             }
 
-            valueColumns.forEach((_, colIndex) => {
+            valueColumns.forEach((col: any, colIndex: number) => {
+                if (col?.source) {
+                    values.push(this.readMatrixMeasureValue(leaf.node, colIndex));
+                    return;
+                }
                 values.push(this.readMatrixCellValue(leaf.node, colIndex));
             });
 
@@ -493,6 +638,50 @@ export class Visual implements IVisual {
         }
 
         return rowNode?.value ?? null;
+    }
+
+    private hasNonEmptyMatrixValues(values: any): boolean {
+        if (!values) return false;
+        if (Array.isArray(values)) return values.length > 0;
+        if (typeof values === "object") return Object.keys(values).length > 0;
+        return false;
+    }
+
+    private findFirstMatrixNodeWithValues(node: any): any | null {
+        if (!node) return null;
+        if (this.hasNonEmptyMatrixValues(node?.values)) return node;
+
+        const children = Array.isArray(node?.children) ? node.children : [];
+        for (const child of children) {
+            const found = this.findFirstMatrixNodeWithValues(child);
+            if (found) return found;
+        }
+        return null;
+    }
+
+    private readMatrixMeasureValue(rowNode: any, measureIndex: number): any {
+        const values = rowNode?.values;
+        if (!values) return null;
+
+        const entries: any[] = [];
+        if (Array.isArray(values)) {
+            entries.push(...values);
+        } else if (typeof values === "object") {
+            const keys = Object.keys(values).sort((a, b) => Number(a) - Number(b));
+            keys.forEach((k) => entries.push(values[k]));
+        }
+
+        const bySourceIndex = entries.find((e: any) =>
+            e && typeof e === "object" && ((e.valueSourceIndex ?? 0) === measureIndex)
+        );
+        if (bySourceIndex && typeof bySourceIndex === "object" && "value" in bySourceIndex) {
+            return (bySourceIndex as any).value;
+        }
+        if (bySourceIndex != null) return bySourceIndex;
+
+        const fallback = entries[measureIndex];
+        if (fallback && typeof fallback === "object" && "value" in fallback) return (fallback as any).value;
+        return fallback ?? null;
     }
 
     private extractTableColumns(table: any): IAdvancedColumn[] {
