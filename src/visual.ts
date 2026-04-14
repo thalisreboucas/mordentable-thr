@@ -7,6 +7,7 @@ import "./../style/advanced-table.less";
 import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
 import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
 import IVisual = powerbi.extensibility.visual.IVisual;
+import IVisualHost = powerbi.extensibility.visual.IVisualHost;
 import DataView = powerbi.DataView;
 
 import { VisualFormattingSettingsModel } from "./settings";
@@ -16,14 +17,16 @@ type DataType = IAdvancedColumn["dataType"];
 
 export class Visual implements IVisual {
     private target: HTMLElement;
+    private host: IVisualHost;
     private formattingSettings: VisualFormattingSettingsModel = new VisualFormattingSettingsModel();
     private formattingSettingsService: FormattingSettingsService;
     private table: AdvancedModernTable;
 
     constructor(options: VisualConstructorOptions) {
         this.formattingSettingsService = new FormattingSettingsService();
+        this.host = options.host;
         this.target = options.element;
-        this.table = new AdvancedModernTable(this.target);
+        this.table = new AdvancedModernTable(this.target, {}, (state) => this.persistOnObjectState(state));
     }
 
     public update(options: VisualUpdateOptions) {
@@ -35,7 +38,18 @@ export class Visual implements IVisual {
                 );
             }
 
+            const dataView = options.dataViews?.[0];
             const tableAppearanceBasicsConfig = this.formattingSettings?.tableAppearanceBasicsCard;
+            const resetRequested = tableAppearanceBasicsConfig?.resetTheme?.value === true;
+
+            if (resetRequested) {
+                // Um clique: limpa tema, cores e estado on-object, e zera o toggle.
+                this.resetVisualFormatting();
+                this.table.loadOnObjectState(undefined);
+            } else {
+                this.table.loadOnObjectState(this.readOnObjectState(dataView));
+            }
+
             const columnsIconsConfig = this.formattingSettings?.columnsIconsCard;
             const tableFeaturesConfig = this.formattingSettings?.tableFeaturesCard;
             const calculatedRowsConfig = this.formattingSettings?.calculatedRowsCard;
@@ -43,8 +57,6 @@ export class Visual implements IVisual {
             const colorsAndBordersConfig = this.formattingSettings?.colorsAndBordersCard;
             const groupingStyleConfig = this.formattingSettings?.groupingStyleCard;
             const totalsStyleConfig = this.formattingSettings?.totalsStyleCard;
-
-            const dataView = options.dataViews?.[0];
 
             const extracted = this.getRenderableData(dataView);
             if (dataView && (extracted.columns.length === 0 || extracted.rows.length === 0)) {
@@ -92,6 +104,105 @@ export class Visual implements IVisual {
         this.target.appendChild(wrap);
     }
 
+    private persistOnObjectState(state: string): void {
+        this.host.persistProperties({
+            merge: [{
+                objectName: "tableFeatures",
+                selector: undefined as any,
+                properties: {
+                    onObjectState: state
+                }
+            }]
+        });
+    }
+
+    private readOnObjectState(dataView?: DataView): string | undefined {
+        const objects: any = (dataView as any)?.metadata?.objects;
+        const raw = objects?.tableFeatures?.onObjectState;
+        return typeof raw === "string" ? raw : undefined;
+    }
+
+    // Um clique para voltar o visual ao estado inicial de aparência
+    private resetVisualFormatting(): void {
+        const fill = (hex: string) => ({ solid: { color: hex } });
+
+        this.host.persistProperties({
+            merge: [
+                {
+                    objectName: "tableFeatures",
+                    selector: undefined as any,
+                    properties: {
+                        // apaga todas as edições on-object (colunas, ícones, barras, etc.)
+                        onObjectState: ""
+                    }
+                },
+                {
+                    objectName: "tableAppearanceBasics",
+                    selector: undefined as any,
+                    properties: {
+                        theme: "light",
+                        accentColor: fill("#0f766e"),
+                        spacingMode: "comfortable",
+                        fontSize: 13,
+                        resetTheme: false
+                    }
+                },
+                {
+                    objectName: "colorsAndBorders",
+                    selector: undefined as any,
+                    properties: {
+                        borderColor: fill("#cbd5f5"),
+                        borderless: false,
+                        striped: false,
+                        headerBackgroundColor: fill("#0f172a"),
+                        headerTextColor: fill("#e2e8f0"),
+                        rowAlternateColor: fill("#f8fafc"),
+                        rowAlternateColor2: fill("#f1f5f9"),
+                        hoverColor: fill("#e2e8f0")
+                    }
+                },
+                {
+                    objectName: "groupingStyle",
+                    selector: undefined as any,
+                    properties: {
+                        groupedRowsBold: true,
+                        groupRowBackgroundColor: fill("#eef2f7"),
+                        groupRowTextColor: fill("#1e293b"),
+                        selectedGroupBackgroundColor: fill("#dbeafe")
+                    }
+                },
+                {
+                    objectName: "totalsStyle",
+                    selector: undefined as any,
+                    properties: {
+                        subtotalRowBackgroundColor: fill("#dffaf3"),
+                        subtotalRowTextColor: fill("#0f766e"),
+                        summaryRowBackgroundColor: fill("#0f172a"),
+                        summaryRowTextColor: fill("#a7f3d0")
+                    }
+                },
+                {
+                    objectName: "layout",
+                    selector: undefined as any,
+                    properties: {
+                        rowHeight: 40,
+                        headerHeight: 44
+                    }
+                },
+                {
+                    objectName: "columnsIcons",
+                    selector: undefined as any,
+                    properties: {
+                        showColumnIcons: true,
+                        iconPreset: "minimal",
+                        columnIconMap: "",
+                        enableColumnResize: true
+                    }
+                }
+            ]
+        });
+    }
+
     // ─── Config Builder ──────────────────────────────────────────────────────
 
     private buildTableConfig(
@@ -104,8 +215,14 @@ export class Visual implements IVisual {
         groupingStyleConfig: any,
         totalsStyleConfig: any
     ): Partial<IAdvancedTableConfig> {
-        const rawSpacing = this.getEnumSelectionValue(appearanceBasicsConfig?.spacingMode?.value, "comfortable");
-        const rawTheme = this.getEnumSelectionValue(appearanceBasicsConfig?.theme?.value, "light");
+        const resetTheme: boolean = appearanceBasicsConfig?.resetTheme?.value === true;
+
+        const rawSpacing = resetTheme
+            ? "comfortable"
+            : this.getEnumSelectionValue(appearanceBasicsConfig?.spacingMode?.value, "comfortable");
+        const rawTheme = resetTheme
+            ? "light"
+            : this.getEnumSelectionValue(appearanceBasicsConfig?.theme?.value, "light");
         const rawIconPreset = this.getEnumSelectionValue(columnsIconsConfig?.iconPreset?.value, "minimal");
         const customColumnIcons = this.parseCustomColumnIcons(String(columnsIconsConfig?.columnIconMap?.value || ""));
 
@@ -122,19 +239,19 @@ export class Visual implements IVisual {
         const enableAutoSum: boolean = calculatedRowsConfig?.enableAutoSum?.value === true;
         const enableGrouping: boolean = tableFeaturesConfig?.enableGrouping?.value === true;
 
-        const rawBorderColor = colorsAndBordersConfig?.borderColor?.value?.value ?? "#e5e7eb";
-        const rawHeaderBackgroundColor = colorsAndBordersConfig?.headerBackgroundColor?.value?.value ?? "#f9fafb";
-        const rawHeaderTextColor = colorsAndBordersConfig?.headerTextColor?.value?.value ?? "#374151";
-        const rawRowAlternateColor = colorsAndBordersConfig?.rowAlternateColor?.value?.value ?? "#ffffff";
-        const rawRowAlternateColor2 = colorsAndBordersConfig?.rowAlternateColor2?.value?.value ?? "#f9fafb";
-        const rawHoverColor = colorsAndBordersConfig?.hoverColor?.value?.value ?? "#eff6ff";
-        const rawGroupRowBackgroundColor = groupingStyleConfig?.groupRowBackgroundColor?.value?.value ?? "#f9fafb";
-        const rawGroupRowTextColor = groupingStyleConfig?.groupRowTextColor?.value?.value ?? "#374151";
-        const rawSelectedGroupBackgroundColor = groupingStyleConfig?.selectedGroupBackgroundColor?.value?.value ?? "#e0e7ff";
-        const rawSummaryRowBackgroundColor = totalsStyleConfig?.summaryRowBackgroundColor?.value?.value ?? "#f0f4ff";
-        const rawSummaryRowTextColor = totalsStyleConfig?.summaryRowTextColor?.value?.value ?? "#1e40af";
-        const rawSubtotalRowBackgroundColor = totalsStyleConfig?.subtotalRowBackgroundColor?.value?.value ?? "#f5f3ff";
-        const rawSubtotalRowTextColor = totalsStyleConfig?.subtotalRowTextColor?.value?.value ?? "#5b21b6";
+        const rawBorderColor = resetTheme ? "#e5e7eb" : (colorsAndBordersConfig?.borderColor?.value?.value ?? "#e5e7eb");
+        const rawHeaderBackgroundColor = resetTheme ? "#f9fafb" : (colorsAndBordersConfig?.headerBackgroundColor?.value?.value ?? "#f9fafb");
+        const rawHeaderTextColor = resetTheme ? "#374151" : (colorsAndBordersConfig?.headerTextColor?.value?.value ?? "#374151");
+        const rawRowAlternateColor = resetTheme ? "#ffffff" : (colorsAndBordersConfig?.rowAlternateColor?.value?.value ?? "#ffffff");
+        const rawRowAlternateColor2 = resetTheme ? "#f9fafb" : (colorsAndBordersConfig?.rowAlternateColor2?.value?.value ?? "#f9fafb");
+        const rawHoverColor = resetTheme ? "#eff6ff" : (colorsAndBordersConfig?.hoverColor?.value?.value ?? "#eff6ff");
+        const rawGroupRowBackgroundColor = resetTheme ? "#f9fafb" : (groupingStyleConfig?.groupRowBackgroundColor?.value?.value ?? "#f9fafb");
+        const rawGroupRowTextColor = resetTheme ? "#374151" : (groupingStyleConfig?.groupRowTextColor?.value?.value ?? "#374151");
+        const rawSelectedGroupBackgroundColor = resetTheme ? "#e0e7ff" : (groupingStyleConfig?.selectedGroupBackgroundColor?.value?.value ?? "#e0e7ff");
+        const rawSummaryRowBackgroundColor = resetTheme ? "#f0f4ff" : (totalsStyleConfig?.summaryRowBackgroundColor?.value?.value ?? "#f0f4ff");
+        const rawSummaryRowTextColor = resetTheme ? "#1e40af" : (totalsStyleConfig?.summaryRowTextColor?.value?.value ?? "#1e40af");
+        const rawSubtotalRowBackgroundColor = resetTheme ? "#f5f3ff" : (totalsStyleConfig?.subtotalRowBackgroundColor?.value?.value ?? "#f5f3ff");
+        const rawSubtotalRowTextColor = resetTheme ? "#5b21b6" : (totalsStyleConfig?.subtotalRowTextColor?.value?.value ?? "#5b21b6");
 
         const themeColors = this.resolveThemeColorDefaults(theme, {
             borderColor: rawBorderColor,
@@ -175,12 +292,16 @@ export class Visual implements IVisual {
             // Layout
             rowHeight: layoutConfig?.rowHeight?.value ?? 40,
             headerHeight: layoutConfig?.headerHeight?.value ?? 44,
+            tableWidthPx: layoutConfig?.tableWidthPx?.value ?? 0,
+            tableHeightPx: layoutConfig?.tableHeightPx?.value ?? 0,
             spacingMode,
 
             // Appearance basics
             theme,
-            fontSize: appearanceBasicsConfig?.fontSize?.value ?? 13,
-            accentColor: appearanceBasicsConfig?.accentColor?.value?.value ?? "#3b82f6",
+            fontSize: resetTheme ? 13 : (appearanceBasicsConfig?.fontSize?.value ?? 13),
+            accentColor: resetTheme
+                ? "#0f766e"
+                : (appearanceBasicsConfig?.accentColor?.value?.value ?? "#3b82f6"),
 
             // Colors & Borders
             borderColor: themeColors.borderColor,
@@ -210,7 +331,6 @@ export class Visual implements IVisual {
             showColumnIcons: columnsIconsConfig?.showColumnIcons?.value !== false,
             iconPreset,
             customColumnIcons,
-            enableEditing: tableFeaturesConfig?.enableEditing?.value === true,
             enableColumnResize: columnsIconsConfig?.enableColumnResize?.value !== false,
             showRowNumbers: tableFeaturesConfig?.showRowNumbers?.value === true,
             enableRowSelection: tableFeaturesConfig?.enableRowSelection?.value === true,

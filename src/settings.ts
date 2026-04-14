@@ -75,13 +75,20 @@ class TableAppearanceBasicsCard extends FormattingSettingsCard {
         value: 13
     });
 
+    resetTheme = new formattingSettings.ToggleSwitch({
+        name: "resetTheme",
+        displayName: "Limpar tema e cores personalizadas",
+        value: false
+    });
+
     name: string = "tableAppearanceBasics";
     displayName: string = "👁️ Aparência & Tema";
     slices: Array<FormattingSettingsSlice> = [
         this.theme,
         this.accentColor,
         this.spacingMode,
-        this.fontSize
+        this.fontSize,
+        this.resetTheme
     ];
 }
 
@@ -158,12 +165,6 @@ class TableFeaturesCard extends FormattingSettingsCard {
         value: true
     });
 
-    enableEditing = new formattingSettings.ToggleSwitch({
-        name: "enableEditing",
-        displayName: "Edição inline (duplo clique)",
-        value: false
-    });
-
     showRowNumbers = new formattingSettings.ToggleSwitch({
         name: "showRowNumbers",
         displayName: "Numeração de linhas",
@@ -184,7 +185,6 @@ class TableFeaturesCard extends FormattingSettingsCard {
         this.enableGrouping,
         this.groupByColumnName,
         this.showHeaderFilter,
-        this.enableEditing,
         this.showRowNumbers,
         this.enableRowSelection
     ];
@@ -367,11 +367,25 @@ class LayoutCard extends FormattingSettingsCard {
         value: 44
     });
 
+    tableWidthPx = new formattingSettings.NumUpDown({
+        name: "tableWidthPx",
+        displayName: "Largura da tabela (px)",
+        value: 0
+    });
+
+    tableHeightPx = new formattingSettings.NumUpDown({
+        name: "tableHeightPx",
+        displayName: "Altura da tabela (px)",
+        value: 0
+    });
+
     name: string = "layout";
     displayName: string = "📏 Layout & Dimensões";
     slices: Array<FormattingSettingsSlice> = [
         this.rowHeight,
-        this.headerHeight
+        this.headerHeight,
+        this.tableWidthPx,
+        this.tableHeightPx
     ];
 }
 

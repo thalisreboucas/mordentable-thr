@@ -1,6 +1,6 @@
 /*
  * ModernTable Pro — Premium Power BI Table Visual
- * Features: data-type icons · filter panels · inline editing · column resize
+ * Features: data-type icons · filter panels · on-object editing · column resize
  *           modern pagination with page size · spacing modes · 4 themes
  *           row selection · grouping · conditional formatting
  */
@@ -22,13 +22,32 @@ export interface IAdvancedColumn {
     backgroundColor?: string;
     textColor?: string;
     bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
+    strikethrough?: boolean;
     editable?: boolean;
     resizable?: boolean;
     minWidth?: number;       // minimum px when resizing (default: 48)
     customIcon?: string;     // custom SVG icon for column header
+    dataBar?: boolean;       // render numeric cells as data bars
+    cellStyle?: "text" | "badge" | "progress";
+    badgeShape?: "rectangle" | "oval";
+    badgePalette?: "soft" | "vivid";
 }
 
-type ColumnFormattingOverride = Partial<Pick<IAdvancedColumn, "alignment" | "fontFamily" | "fontSize" | "textColor" | "bold">>;
+type ColumnFormattingOverride = Partial<Pick<
+    IAdvancedColumn,
+    "alignment" | "fontFamily" | "fontSize" | "textColor" | "bold" | "italic" | "underline" | "strikethrough" | "dataBar" | "cellStyle" | "badgeShape" | "badgePalette"
+>>;
+
+type ColumnIconOverride = {
+    svg?: string;
+    size?: number;
+    color?: string;
+    backgroundColor?: string;
+    // quando definido, permite ligar/desligar ícone só para esta coluna
+    visible?: boolean;
+};
 
 type RangeFilter = { min?: number | null; max?: number | null };
 type InFilter = { in: string[] };
@@ -61,9 +80,19 @@ export interface IConditionalFormat {
     backgroundColor: string;
     textColor: string;
     bold?: boolean;
+    backgroundShape?: "rectangle" | "oval";
+    iconVariant?: string;
 }
 
 type MatrixCalcMode = "sum" | "average" | "count" | "min" | "max";
+
+type OnObjectPersistedState = {
+    version: 1;
+    columnFormattingOverrides?: Record<string, ColumnFormattingOverride>;
+    columnDisplayNameOverrides?: Record<string, string>;
+    conditionalFormats?: IConditionalFormat[];
+    columnIconOverrides?: Record<string, ColumnIconOverride>;
+};
 
 export interface IAdvancedTableConfig {
     // Matrix configuration (pivot table)
@@ -95,6 +124,8 @@ export interface IAdvancedTableConfig {
     // Layout
     rowHeight: number;
     headerHeight: number;
+    tableWidthPx: number;
+    tableHeightPx: number;
     spacingMode: "compact" | "comfortable" | "spacious";
 
     // Appearance
@@ -124,7 +155,6 @@ export interface IAdvancedTableConfig {
     showColumnIcons: boolean;
     iconPreset: "minimal" | "emoji" | "technical";
     customColumnIcons: Record<string, string>;
-    enableEditing: boolean;
     enableColumnResize: boolean;
     showRowNumbers: boolean;
     enableRowSelection: boolean;
@@ -154,15 +184,22 @@ export class AdvancedModernTable {
     private columnFormattingBase: Map<string, ColumnFormattingOverride> = new Map();
     private columnDisplayNameOverrides: Map<string, string> = new Map();
     private columnDisplayNameBase: Map<string, string> = new Map();
-    private showColumnIconsOverride: boolean | null = null;
     private outsideClickHandler: ((e: MouseEvent) => void) | null = null;
     private activeMatrixMenu: HTMLElement | null = null;
     private matrixColumnCalculationModes: Map<string, MatrixCalcMode> = new Map();
     private matrixRowCalculationModes: Map<string, MatrixCalcMode> = new Map();
+    private columnIconOverrides: Map<string, ColumnIconOverride> = new Map();
+    private dataBarStats: Map<string, { min: number; max: number }> = new Map();
+    private onObjectStateChanged?: (state: string) => void;
 
-    constructor(container: HTMLElement, config: Partial<IAdvancedTableConfig> = {}) {
+    constructor(
+        container: HTMLElement,
+        config: Partial<IAdvancedTableConfig> = {},
+        onObjectStateChanged?: (state: string) => void
+    ) {
         this.container = container;
         this.config = this.buildDefaultConfig(config);
+        this.onObjectStateChanged = onObjectStateChanged;
         this.setupOutsideClickHandler();
     }
 
@@ -183,6 +220,8 @@ export class AdvancedModernTable {
             enableConditionalFormatting: true,
             rowHeight: 40,
             headerHeight: 44,
+            tableWidthPx: 0,
+            tableHeightPx: 0,
             spacingMode: "comfortable",
             theme: "light",
             borderColor: "#cbd5e1",
@@ -208,7 +247,6 @@ export class AdvancedModernTable {
             showColumnIcons: true,
             iconPreset: "minimal",
             customColumnIcons: {},
-            enableEditing: false,
             enableColumnResize: true,
             showRowNumbers: false,
             enableRowSelection: false,
@@ -218,16 +256,22 @@ export class AdvancedModernTable {
 
     private setupOutsideClickHandler(): void {
         this.outsideClickHandler = (e: MouseEvent) => {
+            const target = e.target as Node;
+
+            if (document.querySelector(".mt-icon-picker-backdrop")?.contains(target)) {
+                return;
+            }
+
             const panels = this.container.querySelectorAll(".mt-filter-panel, .mt-colfmt-panel, .mt-matrix-menu");
             let clickedInsidePanel = false;
             panels.forEach(panel => {
-                if (panel.contains(e.target as Node)) clickedInsidePanel = true;
+                if (panel.contains(target)) clickedInsidePanel = true;
             });
             if (clickedInsidePanel) return;
 
             const filterBtns = this.container.querySelectorAll(".mt-filter-btn, .mt-colfmt-btn, .mt-matrix-menu-trigger");
             let clickedBtn = false;
-            filterBtns.forEach(btn => { if (btn.contains(e.target as Node)) clickedBtn = true; });
+            filterBtns.forEach(btn => { if (btn.contains(target)) clickedBtn = true; });
             if (!clickedBtn) {
                 this.closeFilterPanel();
                 this.closeConditionalPanel();
@@ -255,7 +299,11 @@ export class AdvancedModernTable {
                 fontFamily: col.fontFamily,
                 fontSize: col.fontSize,
                 textColor: col.textColor,
-                bold: col.bold
+                bold: col.bold,
+                italic: col.italic,
+                underline: col.underline,
+                strikethrough: col.strikethrough,
+                dataBar: col.dataBar
             });
 
             this.columnDisplayNameBase.set(col.name, col.displayName);
@@ -265,12 +313,18 @@ export class AdvancedModernTable {
             const override = this.columnFormattingOverrides.get(col.name);
             const displayNameOverride = this.columnDisplayNameOverrides.get(col.name);
             const displayName = displayNameOverride ?? col.displayName;
-            return { ...col, ...override, displayName, index: idx };
+            const iconOverride = this.columnIconOverrides.get(col.name);
+            const customIcon = iconOverride?.svg ?? col.customIcon;
+            return { ...col, ...override, customIcon, displayName, index: idx };
         });
     }
 
-    private getEffectiveShowColumnIcons(): boolean {
-        return this.showColumnIconsOverride == null ? this.config.showColumnIcons : this.showColumnIconsOverride;
+    private getEffectiveShowColumnIcons(colName: string): boolean {
+        const override = this.columnIconOverrides.get(colName);
+        if (override && typeof override.visible === "boolean") {
+            return override.visible;
+        }
+        return this.config.showColumnIcons;
     }
 
     public setData(rows: IAdvancedRow[]): void {
@@ -291,6 +345,50 @@ export class AdvancedModernTable {
                 this.config.currentPage = totalPages;
             }
         }
+    }
+
+    public loadOnObjectState(serialized?: string): void {
+        if (!serialized) {
+            this.columnFormattingOverrides.clear();
+            this.columnDisplayNameOverrides.clear();
+            this.conditionalFormats = [];
+            this.columnIconOverrides.clear();
+            return;
+        }
+
+        try {
+            const parsed = JSON.parse(serialized) as OnObjectPersistedState;
+            this.columnFormattingOverrides = new Map<string, ColumnFormattingOverride>(
+                Object.entries(parsed.columnFormattingOverrides || {})
+            );
+            this.columnDisplayNameOverrides = new Map<string, string>(
+                Object.entries(parsed.columnDisplayNameOverrides || {})
+            );
+            this.conditionalFormats = Array.isArray(parsed.conditionalFormats)
+                ? parsed.conditionalFormats
+                : [];
+            this.columnIconOverrides = new Map<string, ColumnIconOverride>(
+                Object.entries(parsed.columnIconOverrides || {})
+            );
+        } catch {
+            // Ignore invalid persisted payload and continue with runtime state.
+        }
+    }
+
+    public exportOnObjectState(): string {
+        const state: OnObjectPersistedState = {
+            version: 1,
+            columnFormattingOverrides: Object.fromEntries(this.columnFormattingOverrides.entries()),
+            columnDisplayNameOverrides: Object.fromEntries(this.columnDisplayNameOverrides.entries()),
+            conditionalFormats: this.conditionalFormats,
+            columnIconOverrides: Object.fromEntries(this.columnIconOverrides.entries())
+        };
+        return JSON.stringify(state);
+    }
+
+    private emitOnObjectStateChanged(): void {
+        if (!this.onObjectStateChanged) return;
+        this.onObjectStateChanged(this.exportOnObjectState());
     }
 
     public addConditionalFormat(format: IConditionalFormat): void {
@@ -365,6 +463,27 @@ export class AdvancedModernTable {
                 }
             }
             return true;
+        });
+
+        this.recomputeDataBarStats();
+    }
+
+    private recomputeDataBarStats(): void {
+        this.dataBarStats.clear();
+        const numericColumns = this.columns.filter(c => c.dataType === "number" || c.dataType === "currency" || c.dataType === "percentage");
+        numericColumns.forEach(col => {
+            let min = Number.POSITIVE_INFINITY;
+            let max = Number.NEGATIVE_INFINITY;
+            this.rows.forEach(row => {
+                const v = row.values[col.index];
+                if (typeof v === "number" && !isNaN(v)) {
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                }
+            });
+            if (min !== Number.POSITIVE_INFINITY && max !== Number.NEGATIVE_INFINITY && max > min) {
+                this.dataBarStats.set(col.name, { min, max });
+            }
         });
     }
 
@@ -651,7 +770,13 @@ export class AdvancedModernTable {
 
     // ─── Conditional Formatting ───────────────────────────────────────────────
 
-    private getConditionalStyle(row: IAdvancedRow, colIdx: number): { bg?: string; color?: string; bold?: boolean } {
+    private getConditionalStyle(row: IAdvancedRow, colIdx: number): {
+        bg?: string;
+        color?: string;
+        bold?: boolean;
+        backgroundShape?: "rectangle" | "oval";
+        iconVariant?: string;
+    } {
         if (!this.config.enableConditionalFormatting) return {};
         const value = row.values[colIdx];
         const colName = this.columns[colIdx]?.name;
@@ -666,9 +791,65 @@ export class AdvancedModernTable {
                 case "between": match = value >= fmt.value && value <= fmt.value2; break;
                 case "contains": match = String(value).includes(String(fmt.value)); break;
             }
-            if (match) return { bg: fmt.backgroundColor, color: fmt.textColor, bold: fmt.bold };
+            if (match) {
+                return {
+                    bg: fmt.backgroundColor,
+                    color: fmt.textColor,
+                    bold: fmt.bold,
+                    backgroundShape: fmt.backgroundShape,
+                    iconVariant: fmt.iconVariant
+                } as any;
+            }
         }
         return {};
+    }
+
+    private getBadgeColors(value: any, palette: "soft" | "vivid" = "soft"): { bg: string; color: string } {
+        const key = String(value ?? "");
+        const palettes = {
+            soft: [
+                { bg: "#e0f2fe", color: "#0369a1" },
+                { bg: "#dcfce7", color: "#15803d" },
+                { bg: "#fee2e2", color: "#b91c1c" },
+                { bg: "#fef3c7", color: "#b45309" },
+                { bg: "#ede9fe", color: "#6d28d9" },
+                { bg: "#fce7f3", color: "#be185d" },
+                { bg: "#cffafe", color: "#0e7490" },
+                { bg: "#e2e8f0", color: "#334155" }
+            ],
+            vivid: [
+                { bg: "#22c55e", color: "#052e16" },
+                { bg: "#f97316", color: "#431407" },
+                { bg: "#3b82f6", color: "#1e3a8a" },
+                { bg: "#f43f5e", color: "#4c0519" },
+                { bg: "#a855f7", color: "#3b0764" },
+                { bg: "#eab308", color: "#422006" }
+            ]
+        } as const;
+        const list = palettes[palette] || palettes.soft;
+        const idx = this.hashString(key) % list.length;
+        return list[idx];
+    }
+
+    private hashString(value: string): number {
+        let hash = 0;
+        for (let i = 0; i < value.length; i += 1) {
+            hash = (hash << 5) - hash + value.charCodeAt(i);
+            hash |= 0;
+        }
+        return Math.abs(hash);
+    }
+
+    private getConditionalIconSVG(variant: string): string {
+        const icons: Record<string, string> = {
+            check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
+            alert: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>',
+            dot: '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>',
+            star: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>',
+            arrowUp: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 4l-6 6h4v10h4V10h4z"/></svg>',
+            arrowDown: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 20l6-6h-4V4h-4v10H6z"/></svg>'
+        };
+        return icons[variant] || "";
     }
 
     // ─── Main Render ──────────────────────────────────────────────────────────
@@ -693,6 +874,7 @@ export class AdvancedModernTable {
 
         const wrapper = document.createElement("div");
         wrapper.className = "mt-table-wrapper";
+        this.applyTableDimensions(wrapper);
 
         const table = document.createElement("div");
         table.className = "mt-table";
@@ -742,6 +924,7 @@ export class AdvancedModernTable {
     private renderMatrix(): void {
         const wrapper = document.createElement("div");
         wrapper.className = "mt-table-wrapper";
+        this.applyTableDimensions(wrapper);
 
         const table = document.createElement("div");
         table.className = "mt-table";
@@ -1185,6 +1368,28 @@ export class AdvancedModernTable {
         s.setProperty("--mt-subtotal-text-override", this.config.subtotalRowTextColor);
     }
 
+    private applyTableDimensions(wrapper: HTMLElement): void {
+        const width = this.config.tableWidthPx || 0;
+        if (width > 0) {
+            wrapper.style.width = `${width}px`;
+            wrapper.style.maxWidth = `${width}px`;
+        } else {
+            wrapper.style.removeProperty("width");
+            wrapper.style.removeProperty("max-width");
+        }
+
+        const height = this.config.tableHeightPx || 0;
+        if (height > 0) {
+            wrapper.style.height = `${height}px`;
+            wrapper.style.maxHeight = `${height}px`;
+            wrapper.style.flex = "0 0 auto";
+        } else {
+            wrapper.style.removeProperty("height");
+            wrapper.style.removeProperty("max-height");
+            wrapper.style.removeProperty("flex");
+        }
+    }
+
     // ─── Header ───────────────────────────────────────────────────────────────
 
     private getComplexHeaderDepth(columns: IAdvancedColumn[]): number {
@@ -1346,13 +1551,24 @@ export class AdvancedModernTable {
         inner.className = "mt-th-inner";
 
         // Data type icon
-        if (this.getEffectiveShowColumnIcons()) {
+        if (this.getEffectiveShowColumnIcons(col.name)) {
             const iconContainer = document.createElement("span");
             iconContainer.className = "mt-col-icon";
             iconContainer.setAttribute("data-col-name", col.name);
             iconContainer.style.cursor = "pointer";
-            const svgHtml = this.getColumnIconSVG(col);
+            const iconOverride = this.columnIconOverrides.get(col.name);
+            const svgHtml = iconOverride?.svg || this.getColumnIconSVG(col);
             iconContainer.innerHTML = svgHtml;
+            if (iconOverride?.backgroundColor) iconContainer.style.backgroundColor = iconOverride.backgroundColor;
+            if (iconOverride?.color) iconContainer.style.color = iconOverride.color;
+            if (iconOverride?.size) {
+                iconContainer.style.fontSize = `${iconOverride.size}px`;
+                const svgEl = iconContainer.querySelector("svg") as SVGElement | null;
+                if (svgEl) {
+                    svgEl.setAttribute("width", String(iconOverride.size));
+                    svgEl.setAttribute("height", String(iconOverride.size));
+                }
+            }
             iconContainer.addEventListener("click", (e) => {
                 e.stopPropagation();
                 this.openIconPickerModal(col);
@@ -1419,7 +1635,8 @@ export class AdvancedModernTable {
 
         const fmtBtn = document.createElement("button");
         fmtBtn.className = "mt-colfmt-btn";
-        fmtBtn.setAttribute("aria-label", `Formatar coluna ${col.displayName}`);
+        fmtBtn.setAttribute("aria-label", `Interação no objeto para ${col.displayName}`);
+        fmtBtn.title = `Interação no objeto: ${col.displayName}`;
         if (this.activeColumnFormatPanelColName === col.name) fmtBtn.classList.add("mt-colfmt-active");
         fmtBtn.textContent = "⋮";
         fmtBtn.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -1691,14 +1908,26 @@ export class AdvancedModernTable {
 
             // Conditional formatting
             const cfStyle = this.getConditionalStyle(row, col.index);
-            if (cfStyle.bg) td.style.backgroundColor = cfStyle.bg;
-            if (cfStyle.color) td.style.color = cfStyle.color;
-            if (cfStyle.bold) td.style.fontWeight = "600";
+            const resolvedStyle = col.cellStyle
+                || (col.dataType === "percentage" || col.dataBar ? "progress" : "text");
+            const useProgress = resolvedStyle === "progress";
+            const useBadge = resolvedStyle === "badge"
+                || !!(cfStyle.bg || cfStyle.color || cfStyle.bold || cfStyle.iconVariant);
 
             // Per-column custom styling
-            if (col.backgroundColor && !cfStyle.bg) td.style.backgroundColor = col.backgroundColor;
-            if (col.textColor && !cfStyle.color) td.style.color = col.textColor;
-            if (col.bold) td.style.fontWeight = "600";
+            if (!useBadge) {
+                if (cfStyle.bg) td.style.backgroundColor = cfStyle.bg;
+                if (cfStyle.color) td.style.color = cfStyle.color;
+                if (cfStyle.bold) td.style.fontWeight = "600";
+                if (col.backgroundColor && !cfStyle.bg) td.style.backgroundColor = col.backgroundColor;
+                if (col.textColor && !cfStyle.color) td.style.color = col.textColor;
+                if (col.bold) td.style.fontWeight = "600";
+            }
+            if (col.italic) td.style.fontStyle = "italic";
+            const decorations: string[] = [];
+            if (col.underline) decorations.push("underline");
+            if (col.strikethrough) decorations.push("line-through");
+            if (decorations.length) td.style.textDecoration = decorations.join(" ");
             if (col.fontFamily) td.style.fontFamily = col.fontFamily;
             if (col.fontSize) td.style.fontSize = `${col.fontSize}px`;
 
@@ -1727,13 +1956,61 @@ export class AdvancedModernTable {
                 inner.appendChild(label);
                 td.appendChild(inner);
             } else {
-                td.textContent = formatted;
-            }
+                if (useProgress && typeof value === "number") {
+                    td.classList.add("mt-td-bar");
+                    const pct = col.dataType === "percentage"
+                        ? Math.max(0, Math.min(1, value > 1 ? value / 100 : value))
+                        : (() => {
+                            const stats = this.dataBarStats.get(col.name);
+                            if (!stats || stats.max <= stats.min) return 1;
+                            return Math.max(0, Math.min(1, (value - stats.min) / (stats.max - stats.min)));
+                        })();
+                    const wrap = document.createElement("div");
+                    wrap.className = "mt-bar-wrap";
+                    const bar = document.createElement("div");
+                    bar.className = "mt-bar-fill";
+                    bar.style.width = `${pct * 100}%`;
+                    wrap.appendChild(bar);
+                    const label = document.createElement("span");
+                    label.className = "mt-bar-label";
+                    label.textContent = formatted;
+                    td.appendChild(wrap);
+                    td.appendChild(label);
+                } else if (useBadge) {
+                    td.classList.add("mt-td-badge");
+                    const badge = document.createElement("span");
+                    badge.className = "mt-cond-badge";
+                    badge.style.borderRadius = (cfStyle.backgroundShape || col.badgeShape) === "oval" ? "999px" : "6px";
 
-            // Inline editing
-            if (this.config.enableEditing && col.editable && !row.isCalculated && !row.isSummary) {
-                td.classList.add("mt-td-editable");
-                td.addEventListener("dblclick", () => this.startCellEdit(td, row, col));
+                    if (cfStyle.bg || cfStyle.color) {
+                        if (cfStyle.bg) badge.style.backgroundColor = cfStyle.bg;
+                        if (cfStyle.color) badge.style.color = cfStyle.color;
+                    } else {
+                        const colors = this.getBadgeColors(formatted, col.badgePalette || "soft");
+                        badge.style.backgroundColor = colors.bg;
+                        badge.style.color = colors.color;
+                    }
+
+                    if (cfStyle.bold) badge.style.fontWeight = "600";
+
+                    if (cfStyle.iconVariant) {
+                        const icon = this.getConditionalIconSVG(cfStyle.iconVariant);
+                        if (icon) {
+                            const iconSpan = document.createElement("span");
+                            iconSpan.className = "mt-cond-badge-icon";
+                            iconSpan.innerHTML = icon;
+                            badge.appendChild(iconSpan);
+                        }
+                    }
+
+                    const text = document.createElement("span");
+                    text.className = "mt-cond-badge-text";
+                    text.textContent = formatted;
+                    badge.appendChild(text);
+                    td.appendChild(badge);
+                } else {
+                    td.textContent = formatted;
+                }
             }
 
             tr.appendChild(td);
@@ -1755,19 +2032,142 @@ export class AdvancedModernTable {
 
         const title = document.createElement("div");
         title.className = "mt-colfmt-panel-title";
-        title.textContent = `Coluna - ${col.displayName}`;
+        title.textContent = `On-object: ${col.displayName}`;
         panel.appendChild(title);
+
+        const hint = document.createElement("div");
+        hint.className = "mt-colfmt-panel-hint";
+        hint.textContent = "Ajustes diretos na tabela sem depender da aba do pincel.";
+        panel.appendChild(hint);
+
+        // Helper: campo de cor com HEX + seta + botão fx + matriz de cores
+        const makeColorField = (initial: string) => {
+            const container = document.createElement("div");
+            container.className = "mt-color-field";
+
+            const hexInput = document.createElement("input");
+            hexInput.type = "text";
+            hexInput.className = "mt-color-hex";
+            hexInput.placeholder = "#000000";
+            hexInput.value = initial || "#000000";
+
+            const arrowBtn = document.createElement("button");
+            arrowBtn.type = "button";
+            arrowBtn.className = "mt-color-arrow";
+            arrowBtn.textContent = "▾";
+
+            const fxBtn = document.createElement("button");
+            fxBtn.type = "button";
+            fxBtn.className = "mt-color-fx";
+            fxBtn.textContent = "fx";
+
+            const matrix = document.createElement("div");
+            matrix.className = "mt-color-matrix";
+            const palette = [
+                "#000000", "#111827", "#374151", "#6b7280", "#9ca3af",
+                "#ffffff", "#f9fafb", "#f3f4f6", "#e5e7eb", "#d1d5db",
+                "#f97316", "#ea580c", "#dc2626", "#ef4444", "#facc15",
+                "#22c55e", "#16a34a", "#3b82f6", "#2563eb", "#4f46e5"
+            ];
+            palette.forEach(color => {
+                const sw = document.createElement("button");
+                sw.type = "button";
+                sw.className = "mt-color-swatch";
+                sw.style.backgroundColor = color;
+                sw.addEventListener("click", () => {
+                    hexInput.value = color;
+                    matrix.style.display = "none";
+                });
+                matrix.appendChild(sw);
+            });
+
+            const hiddenPicker = document.createElement("input");
+            hiddenPicker.type = "color";
+            hiddenPicker.style.display = "none";
+            hiddenPicker.value = initial || "#000000";
+            hiddenPicker.addEventListener("input", () => {
+                hexInput.value = hiddenPicker.value;
+            });
+
+            arrowBtn.addEventListener("click", () => {
+                matrix.style.display = matrix.style.display === "flex" ? "none" : "flex";
+            });
+
+            fxBtn.addEventListener("click", () => {
+                hiddenPicker.click();
+            });
+
+            container.appendChild(hexInput);
+            container.appendChild(arrowBtn);
+            container.appendChild(fxBtn);
+            container.appendChild(hiddenPicker);
+
+            return { container, hexInput, matrix };
+        };
+
+        // Blocos principais do painel
+        const iconSection = document.createElement("div");
+        iconSection.className = "mt-colfmt-section";
+        const iconSectionTitle = document.createElement("div");
+        iconSectionTitle.className = "mt-colfmt-section-title";
+        iconSectionTitle.textContent = "Edição de ícone";
+        iconSection.appendChild(iconSectionTitle);
+
+        const titleSection = document.createElement("div");
+        titleSection.className = "mt-colfmt-section";
+        const titleSectionTitle = document.createElement("div");
+        titleSectionTitle.className = "mt-colfmt-section-title";
+        titleSectionTitle.textContent = "Edição de título";
+        titleSection.appendChild(titleSectionTitle);
+
+        const valuesSection = document.createElement("div");
+        valuesSection.className = "mt-colfmt-section";
+        const valuesSectionTitle = document.createElement("div");
+        valuesSectionTitle.className = "mt-colfmt-section-title";
+        valuesSectionTitle.textContent = "Edição de valores";
+        valuesSection.appendChild(valuesSectionTitle);
 
         const iconsWrap = document.createElement("label");
         iconsWrap.className = "mt-cond-checkbox";
         const iconsEnabled = document.createElement("input");
         iconsEnabled.type = "checkbox";
-        iconsEnabled.checked = this.getEffectiveShowColumnIcons();
+        iconsEnabled.checked = this.getEffectiveShowColumnIcons(col.name);
         const iconsEnabledLabel = document.createElement("span");
         iconsEnabledLabel.textContent = "Mostrar ícones da coluna";
         iconsWrap.appendChild(iconsEnabled);
         iconsWrap.appendChild(iconsEnabledLabel);
         panel.appendChild(iconsWrap);
+
+        const iconColorLabel = document.createElement("label");
+        iconColorLabel.className = "mt-cond-color-label";
+        iconColorLabel.textContent = "Cor do ícone";
+        const existingIconOverride = this.columnIconOverrides.get(col.name);
+        const iconColorField = makeColorField(existingIconOverride?.color || "#334155");
+
+        const iconBgLabel = document.createElement("label");
+        iconBgLabel.className = "mt-cond-color-label";
+        iconBgLabel.textContent = "Fundo do ícone";
+        const iconBgField = makeColorField(existingIconOverride?.backgroundColor || "#f8df47");
+
+        const iconSizeLabel = document.createElement("label");
+        iconSizeLabel.className = "mt-cond-color-label";
+        iconSizeLabel.textContent = "Tamanho do ícone (px)";
+        const iconSizeInput = document.createElement("input");
+        iconSizeInput.className = "mt-cond-input";
+        iconSizeInput.type = "number";
+        iconSizeInput.placeholder = "14";
+        iconSizeInput.min = "8";
+        iconSizeInput.max = "32";
+        if (existingIconOverride?.size) iconSizeInput.value = String(existingIconOverride.size);
+
+        const iconSvgLabel = document.createElement("label");
+        iconSvgLabel.className = "mt-cond-color-label";
+        iconSvgLabel.textContent = "SVG personalizado (opcional)";
+        const iconSvgInput = document.createElement("textarea");
+        iconSvgInput.className = "mt-cond-textarea";
+        iconSvgInput.rows = 3;
+        iconSvgInput.placeholder = "Cole aqui o código <svg>...</svg>";
+        iconSvgInput.value = existingIconOverride?.svg || "";
 
         const renameLabel = document.createElement("label");
         renameLabel.className = "mt-cond-color-label";
@@ -1781,29 +2181,60 @@ export class AdvancedModernTable {
         const alignLabel = document.createElement("label");
         alignLabel.className = "mt-cond-color-label";
         alignLabel.textContent = "Alinhamento";
-        const alignSelect = document.createElement("select");
-        alignSelect.className = "mt-cond-select";
-        [
-            { value: "left", text: "Esquerda" },
-            { value: "center", text: "Centralizado" },
-            { value: "right", text: "Direita" }
-        ].forEach(opt => {
-            const o = document.createElement("option");
-            o.value = opt.value;
-            o.textContent = opt.text;
-            alignSelect.appendChild(o);
-        });
-        alignSelect.value = col.alignment;
+        const alignGroup = document.createElement("div");
+        alignGroup.className = "mt-cond-toggle-group";
 
-        const boldWrap = document.createElement("label");
-        boldWrap.className = "mt-cond-checkbox";
-        const boldEnabled = document.createElement("input");
-        boldEnabled.type = "checkbox";
-        boldEnabled.checked = !!col.bold;
-        const boldEnabledLabel = document.createElement("span");
-        boldEnabledLabel.textContent = "Negrito";
-        boldWrap.appendChild(boldEnabled);
-        boldWrap.appendChild(boldEnabledLabel);
+        const makeAlignBtn = (value: IAdvancedColumn["alignment"], icon: string, aria: string) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "mt-cond-toggle-btn mt-cond-toggle-align";
+            btn.setAttribute("data-align", value);
+            btn.setAttribute("aria-label", aria);
+            btn.textContent = icon;
+            if (col.alignment === value) btn.classList.add("mt-cond-toggle-active");
+            btn.addEventListener("click", () => {
+                Array.from(alignGroup.querySelectorAll(".mt-cond-toggle-btn"))
+                    .forEach(el => el.classList.remove("mt-cond-toggle-active"));
+                btn.classList.add("mt-cond-toggle-active");
+            });
+            return btn;
+        };
+
+        const alignLeftBtn = makeAlignBtn("left", "≡", "Alinhar à esquerda");
+        const alignCenterBtn = makeAlignBtn("center", "≡", "Centralizar");
+        const alignRightBtn = makeAlignBtn("right", "≡", "Alinhar à direita");
+        alignGroup.appendChild(alignLeftBtn);
+        alignGroup.appendChild(alignCenterBtn);
+        alignGroup.appendChild(alignRightBtn);
+
+        const styleLabel = document.createElement("label");
+        styleLabel.className = "mt-cond-color-label";
+        styleLabel.textContent = "Estilo do texto";
+        const styleGroup = document.createElement("div");
+        styleGroup.className = "mt-cond-toggle-group";
+
+        const makeStyleBtn = (key: "bold" | "italic" | "underline" | "strikethrough", label: string, aria: string, active: boolean) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "mt-cond-toggle-btn";
+            btn.setAttribute("data-style", key);
+            btn.setAttribute("aria-label", aria);
+            btn.textContent = label;
+            if (active) btn.classList.add("mt-cond-toggle-active");
+            btn.addEventListener("click", () => {
+                btn.classList.toggle("mt-cond-toggle-active");
+            });
+            return btn;
+        };
+
+        const boldBtn = makeStyleBtn("bold", "B", "Negrito", !!col.bold);
+        const italicBtn = makeStyleBtn("italic", "I", "Itálico", !!col.italic);
+        const underlineBtn = makeStyleBtn("underline", "U", "Sublinhado", !!col.underline);
+        const strikeBtn = makeStyleBtn("strikethrough", "S", "Tachado", !!col.strikethrough);
+        styleGroup.appendChild(boldBtn);
+        styleGroup.appendChild(italicBtn);
+        styleGroup.appendChild(underlineBtn);
+        styleGroup.appendChild(strikeBtn);
 
         const fontLabel = document.createElement("label");
         fontLabel.className = "mt-cond-color-label";
@@ -1836,6 +2267,74 @@ export class AdvancedModernTable {
             sizeInput.value = String(col.fontSize);
         }
 
+        const cellStyleLabel = document.createElement("label");
+        cellStyleLabel.className = "mt-cond-color-label";
+        cellStyleLabel.textContent = "Estilo de exibicao";
+        const cellStyleSelect = document.createElement("select");
+        cellStyleSelect.className = "mt-cond-select";
+        const styleOptions: Array<{ value: IAdvancedColumn["cellStyle"]; text: string }> = [
+            { value: "text", text: "Texto" },
+            { value: "badge", text: "Badge (chips)" }
+        ];
+        if (col.dataType === "number" || col.dataType === "currency" || col.dataType === "percentage") {
+            styleOptions.push({ value: "progress", text: "Progresso" });
+        }
+        styleOptions.forEach(opt => {
+            const o = document.createElement("option");
+            o.value = opt.value || "text";
+            o.textContent = opt.text;
+            cellStyleSelect.appendChild(o);
+        });
+
+        const initialStyle = col.cellStyle
+            || (col.dataType === "percentage" || col.dataBar ? "progress" : "text");
+        cellStyleSelect.value = initialStyle || "text";
+
+        const badgeShapeLabel = document.createElement("label");
+        badgeShapeLabel.className = "mt-cond-color-label";
+        badgeShapeLabel.textContent = "Formato do badge";
+        const badgeShapeSelect = document.createElement("select");
+        badgeShapeSelect.className = "mt-cond-select";
+        [
+            { value: "oval", text: "Oval" },
+            { value: "rectangle", text: "Retangulo" }
+        ].forEach(opt => {
+            const o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.text;
+            badgeShapeSelect.appendChild(o);
+        });
+        badgeShapeSelect.value = col.badgeShape || "oval";
+
+        const badgePaletteLabel = document.createElement("label");
+        badgePaletteLabel.className = "mt-cond-color-label";
+        badgePaletteLabel.textContent = "Paleta do badge";
+        const badgePaletteSelect = document.createElement("select");
+        badgePaletteSelect.className = "mt-cond-select";
+        [
+            { value: "soft", text: "Suave" },
+            { value: "vivid", text: "Viva" }
+        ].forEach(opt => {
+            const o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.text;
+            badgePaletteSelect.appendChild(o);
+        });
+        badgePaletteSelect.value = col.badgePalette || "soft";
+
+        const badgeOptionsWrap = document.createElement("div");
+        badgeOptionsWrap.className = "mt-colfmt-subsection";
+        badgeOptionsWrap.appendChild(badgeShapeLabel);
+        badgeOptionsWrap.appendChild(badgeShapeSelect);
+        badgeOptionsWrap.appendChild(badgePaletteLabel);
+        badgeOptionsWrap.appendChild(badgePaletteSelect);
+
+        const syncBadgeOptions = () => {
+            badgeOptionsWrap.style.display = cellStyleSelect.value === "badge" ? "" : "none";
+        };
+        cellStyleSelect.addEventListener("change", syncBadgeOptions);
+        syncBadgeOptions();
+
         const textWrap = document.createElement("label");
         textWrap.className = "mt-cond-checkbox";
         const textEnabled = document.createElement("input");
@@ -1849,14 +2348,12 @@ export class AdvancedModernTable {
         const textLabel = document.createElement("label");
         textLabel.className = "mt-cond-color-label";
         textLabel.textContent = "Cor da fonte";
-        const textInput = document.createElement("input");
-        textInput.className = "mt-cond-color";
-        textInput.type = "color";
-        textInput.value = col.textColor || "#111827";
-        textInput.disabled = !textEnabled.checked;
+        const textColorField = makeColorField(col.textColor || "#111827");
+        const textHexInput = textColorField.hexInput;
+        textHexInput.disabled = !textEnabled.checked;
 
         textEnabled.addEventListener("change", () => {
-            textInput.disabled = !textEnabled.checked;
+            textHexInput.disabled = !textEnabled.checked;
         });
 
         const actions = document.createElement("div");
@@ -1867,6 +2364,7 @@ export class AdvancedModernTable {
         clearBtn.textContent = "Limpar formatação";
         clearBtn.addEventListener("click", () => {
             this.clearColumnFormattingForColumn(col.name);
+            this.emitOnObjectStateChanged();
             this.closeColumnFormatPanel();
             this.render();
         });
@@ -1876,15 +2374,30 @@ export class AdvancedModernTable {
         applyBtn.textContent = "Aplicar";
         applyBtn.addEventListener("click", () => {
             const fontSize = sizeInput.value !== "" ? parseInt(sizeInput.value, 10) : undefined;
+            const activeAlignBtn = alignGroup.querySelector<HTMLElement>(".mt-cond-toggle-btn.mt-cond-toggle-active");
+            const newAlign = (activeAlignBtn?.getAttribute("data-align") as IAdvancedColumn["alignment"]) || col.alignment;
+            const isBold = boldBtn.classList.contains("mt-cond-toggle-active");
+            const isItalic = italicBtn.classList.contains("mt-cond-toggle-active");
+            const isUnderline = underlineBtn.classList.contains("mt-cond-toggle-active");
+            const isStrike = strikeBtn.classList.contains("mt-cond-toggle-active");
+            const styleValue = cellStyleSelect.value as IAdvancedColumn["cellStyle"];
             const override: ColumnFormattingOverride = {
-                alignment: alignSelect.value as IAdvancedColumn["alignment"],
+                alignment: newAlign,
                 fontFamily: fontSelect.value.trim() || undefined,
                 fontSize: fontSize != null && !isNaN(fontSize) ? fontSize : undefined,
-                textColor: textEnabled.checked ? textInput.value : undefined,
-                bold: boldEnabled.checked
+                textColor: textEnabled.checked ? textHexInput.value : undefined,
+                bold: isBold,
+                italic: isItalic,
+                underline: isUnderline,
+                strikethrough: isStrike,
+                dataBar: styleValue === "progress",
+                cellStyle: styleValue,
+                badgeShape: styleValue === "badge" ? (badgeShapeSelect.value as IAdvancedColumn["badgeShape"]) : undefined,
+                badgePalette: styleValue === "badge" ? (badgePaletteSelect.value as IAdvancedColumn["badgePalette"]) : undefined
             };
 
             this.setColumnFormattingForColumn(col.name, override);
+            this.recomputeDataBarStats();
 
             const baseDisplayName = this.columnDisplayNameBase.get(col.name) ?? col.displayName;
             const newDisplayName = renameInput.value.trim();
@@ -1903,7 +2416,27 @@ export class AdvancedModernTable {
             });
 
             const desiredIcons = iconsEnabled.checked;
-            this.showColumnIconsOverride = desiredIcons === this.config.showColumnIcons ? null : desiredIcons;
+            const defaultIcons = this.config.showColumnIcons;
+            const visibleOverride = desiredIcons === defaultIcons ? undefined : desiredIcons;
+
+            const iconOverride: ColumnIconOverride = {
+                ...this.columnIconOverrides.get(col.name),
+                svg: iconSvgInput.value.trim() || undefined,
+                size: iconSizeInput.value ? parseInt(iconSizeInput.value, 10) || undefined : undefined,
+                color: iconColorField.hexInput.value,
+                backgroundColor: iconBgField.hexInput.value,
+                visible: visibleOverride
+            };
+
+            const hasVisualProps = !!(iconOverride.svg || iconOverride.size || iconOverride.color || iconOverride.backgroundColor);
+            const hasVisibility = typeof iconOverride.visible === "boolean";
+
+            if (!hasVisualProps && !hasVisibility) {
+                this.columnIconOverrides.delete(col.name);
+            } else {
+                this.columnIconOverrides.set(col.name, iconOverride);
+            }
+            this.emitOnObjectStateChanged();
 
             this.closeColumnFormatPanel();
             this.render();
@@ -1912,18 +2445,41 @@ export class AdvancedModernTable {
         actions.appendChild(clearBtn);
         actions.appendChild(applyBtn);
 
-        panel.appendChild(renameLabel);
-        panel.appendChild(renameInput);
-        panel.appendChild(alignLabel);
-        panel.appendChild(alignSelect);
-        panel.appendChild(boldWrap);
-        panel.appendChild(fontLabel);
-        panel.appendChild(fontSelect);
-        panel.appendChild(sizeLabel);
-        panel.appendChild(sizeInput);
-        panel.appendChild(textWrap);
-        panel.appendChild(textLabel);
-        panel.appendChild(textInput);
+        // Monta seções com blocos visuais
+        iconSection.appendChild(iconsWrap);
+        iconSection.appendChild(iconColorLabel);
+        iconSection.appendChild(iconColorField.container);
+        iconSection.appendChild(iconColorField.matrix);
+        iconSection.appendChild(iconBgLabel);
+        iconSection.appendChild(iconBgField.container);
+        iconSection.appendChild(iconBgField.matrix);
+        iconSection.appendChild(iconSizeLabel);
+        iconSection.appendChild(iconSizeInput);
+        iconSection.appendChild(iconSvgLabel);
+        iconSection.appendChild(iconSvgInput);
+
+        titleSection.appendChild(renameLabel);
+        titleSection.appendChild(renameInput);
+        titleSection.appendChild(alignLabel);
+        titleSection.appendChild(alignGroup);
+        titleSection.appendChild(styleLabel);
+        titleSection.appendChild(styleGroup);
+        titleSection.appendChild(fontLabel);
+        titleSection.appendChild(fontSelect);
+        titleSection.appendChild(sizeLabel);
+        titleSection.appendChild(sizeInput);
+        titleSection.appendChild(textWrap);
+        titleSection.appendChild(textLabel);
+        titleSection.appendChild(textColorField.container);
+        titleSection.appendChild(textColorField.matrix);
+
+        valuesSection.appendChild(cellStyleLabel);
+        valuesSection.appendChild(cellStyleSelect);
+        valuesSection.appendChild(badgeOptionsWrap);
+
+        panel.appendChild(iconSection);
+        panel.appendChild(titleSection);
+        panel.appendChild(valuesSection);
         panel.appendChild(actions);
 
         if (this.config.enableConditionalFormatting) {
@@ -1977,10 +2533,42 @@ export class AdvancedModernTable {
             const bgLabel = document.createElement("label");
             bgLabel.className = "mt-cond-color-label";
             bgLabel.textContent = "Cor de fundo";
-            const bgInput = document.createElement("input");
-            bgInput.className = "mt-cond-color";
-            bgInput.type = "color";
-            bgInput.value = "#dbeafe";
+            const bgField = makeColorField("#dbeafe");
+
+            const condShapeLabel = document.createElement("label");
+            condShapeLabel.className = "mt-cond-color-label";
+            condShapeLabel.textContent = "Formato do fundo";
+            const condShapeSelect = document.createElement("select");
+            condShapeSelect.className = "mt-cond-select";
+            [
+                { value: "rectangle", text: "Retangulo" },
+                { value: "oval", text: "Oval" }
+            ].forEach(opt => {
+                const o = document.createElement("option");
+                o.value = opt.value;
+                o.textContent = opt.text;
+                condShapeSelect.appendChild(o);
+            });
+
+            const condIconLabel = document.createElement("label");
+            condIconLabel.className = "mt-cond-color-label";
+            condIconLabel.textContent = "Icone na linha";
+            const condIconSelect = document.createElement("select");
+            condIconSelect.className = "mt-cond-select";
+            [
+                { value: "", text: "Sem icone" },
+                { value: "check", text: "Check" },
+                { value: "alert", text: "Alerta" },
+                { value: "dot", text: "Ponto" },
+                { value: "star", text: "Estrela" },
+                { value: "arrowUp", text: "Seta para cima" },
+                { value: "arrowDown", text: "Seta para baixo" }
+            ].forEach(opt => {
+                const o = document.createElement("option");
+                o.value = opt.value;
+                o.textContent = opt.text;
+                condIconSelect.appendChild(o);
+            });
 
             const condTextWrap = document.createElement("label");
             condTextWrap.className = "mt-cond-checkbox";
@@ -1994,14 +2582,12 @@ export class AdvancedModernTable {
             const condTextLabel = document.createElement("label");
             condTextLabel.className = "mt-cond-color-label";
             condTextLabel.textContent = "Cor do texto";
-            const condTextInput = document.createElement("input");
-            condTextInput.className = "mt-cond-color";
-            condTextInput.type = "color";
-            condTextInput.value = "#1e3a8a";
-            condTextInput.disabled = true;
+            const condTextField = makeColorField("#1e3a8a");
+            const condTextHexInput = condTextField.hexInput;
+            condTextHexInput.disabled = true;
 
             condTextEnabled.addEventListener("change", () => {
-                condTextInput.disabled = !condTextEnabled.checked;
+                condTextHexInput.disabled = !condTextEnabled.checked;
             });
 
             const condActions = document.createElement("div");
@@ -2012,6 +2598,7 @@ export class AdvancedModernTable {
             clearRuleBtn.textContent = "Limpar regra";
             clearRuleBtn.addEventListener("click", () => {
                 this.clearConditionalFormatsForColumn(col.name);
+                this.emitOnObjectStateChanged();
                 this.closeColumnFormatPanel();
                 this.render();
             });
@@ -2034,10 +2621,13 @@ export class AdvancedModernTable {
                     condition,
                     value,
                     value2,
-                    backgroundColor: bgInput.value,
-                    textColor: condTextEnabled.checked ? condTextInput.value : "",
-                    bold: false
+                    backgroundColor: bgField.hexInput.value,
+                    textColor: condTextEnabled.checked ? condTextHexInput.value : "",
+                    bold: false,
+                    backgroundShape: condShapeSelect.value as IConditionalFormat["backgroundShape"],
+                    iconVariant: condIconSelect.value || undefined
                 });
+                this.emitOnObjectStateChanged();
 
                 this.closeColumnFormatPanel();
                 this.render();
@@ -2046,15 +2636,21 @@ export class AdvancedModernTable {
             condActions.appendChild(clearRuleBtn);
             condActions.appendChild(applyRuleBtn);
 
-            panel.appendChild(condSelect);
-            panel.appendChild(valueInput);
-            panel.appendChild(valueInput2);
-            panel.appendChild(bgLabel);
-            panel.appendChild(bgInput);
-            panel.appendChild(condTextWrap);
-            panel.appendChild(condTextLabel);
-            panel.appendChild(condTextInput);
-            panel.appendChild(condActions);
+            valuesSection.appendChild(condSelect);
+            valuesSection.appendChild(valueInput);
+            valuesSection.appendChild(valueInput2);
+            valuesSection.appendChild(bgLabel);
+            valuesSection.appendChild(bgField.container);
+            valuesSection.appendChild(bgField.matrix);
+            valuesSection.appendChild(condShapeLabel);
+            valuesSection.appendChild(condShapeSelect);
+            valuesSection.appendChild(condIconLabel);
+            valuesSection.appendChild(condIconSelect);
+            valuesSection.appendChild(condTextWrap);
+            valuesSection.appendChild(condTextLabel);
+            valuesSection.appendChild(condTextField.container);
+            valuesSection.appendChild(condTextField.matrix);
+            valuesSection.appendChild(condActions);
         }
 
         this.container.style.position = "relative";
@@ -2092,9 +2688,15 @@ export class AdvancedModernTable {
                 fontFamily: base?.fontFamily,
                 fontSize: base?.fontSize,
                 textColor: base?.textColor,
-                bold: base?.bold
+                bold: base?.bold,
+                italic: base?.italic,
+                underline: base?.underline,
+                strikethrough: base?.strikethrough,
+                dataBar: base?.dataBar
             };
         });
+
+        this.columnIconOverrides.delete(columnName);
     }
 
     private setColumnFormattingForColumn(columnName: string, override: ColumnFormattingOverride): void {
@@ -2673,6 +3275,41 @@ export class AdvancedModernTable {
         bgInput.type = "color";
         bgInput.value = "#dbeafe";
 
+        const shapeLabel = document.createElement("label");
+        shapeLabel.className = "mt-cond-color-label";
+        shapeLabel.textContent = "Formato do fundo";
+        const shapeSelect = document.createElement("select");
+        shapeSelect.className = "mt-cond-select";
+        [
+            { value: "rectangle", text: "Retângulo" },
+            { value: "oval", text: "Oval" }
+        ].forEach(opt => {
+            const o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.text;
+            shapeSelect.appendChild(o);
+        });
+
+        const iconLabel = document.createElement("label");
+        iconLabel.className = "mt-cond-color-label";
+        iconLabel.textContent = "Ícone na linha";
+        const iconSelect = document.createElement("select");
+        iconSelect.className = "mt-cond-select";
+        [
+            { value: "", text: "Sem ícone" },
+            { value: "check", text: "Check" },
+            { value: "alert", text: "Alerta" },
+            { value: "dot", text: "Ponto" },
+            { value: "star", text: "Estrela" },
+            { value: "arrowUp", text: "Seta para cima" },
+            { value: "arrowDown", text: "Seta para baixo" }
+        ].forEach(opt => {
+            const o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.text;
+            iconSelect.appendChild(o);
+        });
+
         const textWrap = document.createElement("label");
         textWrap.className = "mt-cond-checkbox";
         const textEnabled = document.createElement("input");
@@ -2703,6 +3340,7 @@ export class AdvancedModernTable {
         clearBtn.textContent = "Limpar regra";
         clearBtn.addEventListener("click", () => {
             this.clearConditionalFormatsForColumn(col.name);
+            this.emitOnObjectStateChanged();
             this.closeConditionalPanel();
             this.render();
         });
@@ -2727,8 +3365,11 @@ export class AdvancedModernTable {
                 value2,
                 backgroundColor: bgInput.value,
                 textColor: textEnabled.checked ? textInput.value : "",
-                bold: false
+                bold: false,
+                backgroundShape: shapeSelect.value as IConditionalFormat["backgroundShape"],
+                iconVariant: iconSelect.value || undefined
             });
+            this.emitOnObjectStateChanged();
             this.closeConditionalPanel();
             this.render();
         });
@@ -2738,6 +3379,10 @@ export class AdvancedModernTable {
         panel.appendChild(valueInput2);
         panel.appendChild(bgLabel);
         panel.appendChild(bgInput);
+        panel.appendChild(shapeLabel);
+        panel.appendChild(shapeSelect);
+        panel.appendChild(iconLabel);
+        panel.appendChild(iconSelect);
         panel.appendChild(textWrap);
         panel.appendChild(textLabel);
         panel.appendChild(textInput);
@@ -2825,47 +3470,6 @@ export class AdvancedModernTable {
 
         document.addEventListener("mousemove", onMouseMove);
         document.addEventListener("mouseup", onMouseUp);
-    }
-
-    // ─── Inline Cell Editing ──────────────────────────────────────────────────
-
-    private startCellEdit(cell: HTMLElement, row: IAdvancedRow, col: IAdvancedColumn): void {
-        if (cell.querySelector(".mt-edit-input")) return;
-
-        const originalText = cell.textContent || "";
-        cell.textContent = "";
-        cell.classList.add("mt-td-editing");
-
-        const input = document.createElement("input");
-        input.className = "mt-edit-input";
-        input.value = originalText === "–" || originalText === "-" ? "" : originalText;
-        input.type = (col.dataType === "number" || col.dataType === "currency") ? "number" : "text";
-
-        const commit = () => {
-            cell.classList.remove("mt-td-editing");
-            let newVal: any = input.value;
-            if ((col.dataType === "number" || col.dataType === "currency") && input.value !== "") {
-                newVal = parseFloat(input.value);
-                if (isNaN(newVal)) newVal = row.values[col.index];
-            }
-            row.values[col.index] = newVal;
-            cell.textContent = this.formatCellValue(newVal, col);
-        };
-
-        const cancel = () => {
-            cell.classList.remove("mt-td-editing");
-            cell.textContent = originalText;
-        };
-
-        input.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") { e.preventDefault(); commit(); }
-            if (e.key === "Escape") { e.preventDefault(); cancel(); }
-        });
-        input.addEventListener("blur", commit);
-
-        cell.appendChild(input);
-        input.focus();
-        input.select();
     }
 
     // ─── Icon Helpers ─────────────────────────────────────────────────────────
@@ -2966,11 +3570,50 @@ export class AdvancedModernTable {
 
         const modal = document.createElement("div");
         modal.className = "mt-icon-picker-modal";
+        modal.addEventListener("click", (e) => e.stopPropagation());
 
         const header = document.createElement("div");
         header.className = "mt-icon-picker-header";
         header.innerHTML = `<h3>Escolher ícone para <strong>${col.displayName}</strong></h3>`;
 
+        // Área para texto ou emoji simples
+        const textRow = document.createElement("div");
+        textRow.className = "mt-icon-picker-text-row";
+
+        const textLabel = document.createElement("label");
+        textLabel.className = "mt-icon-picker-text-label";
+        textLabel.textContent = "Texto / emoji como ícone";
+
+        const textInputWrap = document.createElement("div");
+        textInputWrap.className = "mt-icon-picker-text-wrap";
+
+        const textInput = document.createElement("input");
+        textInput.type = "text";
+        textInput.maxLength = 3;
+        textInput.className = "mt-icon-picker-text-input";
+        textInput.placeholder = "Ex.: Aa, %, ✓";
+        textInput.addEventListener("click", (e) => e.stopPropagation());
+
+        const textApplyBtn = document.createElement("button");
+        textApplyBtn.type = "button";
+        textApplyBtn.className = "mt-icon-picker-text-apply";
+        textApplyBtn.textContent = "Usar";
+        textApplyBtn.addEventListener("click", () => {
+            const value = textInput.value.trim();
+            if (!value) return;
+            const safe = value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            const svg = `<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><text x="50%" y="50%" text-anchor="middle" dy=".3em" style="font-size:12px;font-weight:600">${safe}</text></svg>`;
+            col.customIcon = svg;
+            backdrop.remove();
+            this.render();
+        });
+
+        textInputWrap.appendChild(textInput);
+        textInputWrap.appendChild(textApplyBtn);
+        textRow.appendChild(textLabel);
+        textRow.appendChild(textInputWrap);
+
+        // Grid de ícones prontos
         const grid = document.createElement("div");
         grid.className = "mt-icon-picker-grid";
 
@@ -2979,7 +3622,7 @@ export class AdvancedModernTable {
             const item = document.createElement("button");
             item.className = "mt-icon-picker-item";
             item.setAttribute("data-variant", String(index));
-            item.innerHTML = `<div class="mt-icon-picker-preview">${variant.svg}</div><span>${variant.label}</span>`;
+            item.innerHTML = `<div class=\"mt-icon-picker-preview\">${variant.svg}</div><span>${variant.label}</span>`;
             item.addEventListener("click", () => {
                 col.customIcon = variant.svg;
                 backdrop.remove();
@@ -2999,6 +3642,7 @@ export class AdvancedModernTable {
         footer.appendChild(closeBtn);
 
         modal.appendChild(header);
+        modal.appendChild(textRow);
         modal.appendChild(grid);
         modal.appendChild(footer);
         backdrop.appendChild(modal);
@@ -3006,40 +3650,115 @@ export class AdvancedModernTable {
     }
 
     private getIconVariants(dataType: IAdvancedColumn["dataType"]): Array<{ svg: string; label: string }> {
+        const svgFill = (inner: string) => `<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">${inner}</svg>`;
+        const svgStroke = (inner: string) => `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+
+        const commonVariants: Array<{ svg: string; label: string }> = [
+            { svg: svgFill('<path d="M4 11l8-7 8 7v8h-5v-5H9v5H4z"/>'), label: "Home" },
+            { svg: svgStroke('<circle cx="12" cy="8" r="3"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/>'), label: "User" },
+            { svg: svgStroke('<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2"/><path d="M3 20c0-4 4-6 8-6"/><path d="M13 20c0-3 3-4 6-4"/>'), label: "Users" },
+            { svg: svgStroke('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>'), label: "Mail" },
+            { svg: svgFill('<path d="M6 3h4l1 4-2 1c1.5 3 3.5 5 6 6l1-2 4 1v4c-5 1-14-8-14-14z"/>'), label: "Phone" },
+            { svg: svgFill('<rect x="3" y="5" width="18" height="16" rx="2"/><rect x="3" y="9" width="18" height="2"/><rect x="7" y="13" width="3" height="3"/><rect x="12" y="13" width="3" height="3"/>'), label: "Calendar" },
+            { svg: svgStroke('<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>'), label: "Clock" },
+            { svg: svgStroke('<path d="M3 12l9 9 9-9-9-9H3z"/><circle cx="7" cy="9" r="1"/>'), label: "Tag" },
+            { svg: svgStroke('<path d="M5 4h10l-1 3 3 3H5v10"/>'), label: "Flag" },
+            { svg: svgFill('<path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>'), label: "Star" },
+            { svg: svgStroke('<path d="M5 12l4 4 10-10"/>'), label: "Check" },
+            { svg: svgStroke('<path d="M6 6l12 12"/><path d="M18 6L6 18"/>'), label: "Close" },
+            { svg: svgStroke('<path d="M12 3l9 16H3z"/><path d="M12 9v4"/><path d="M12 17h.01"/>'), label: "Alert" },
+            { svg: svgStroke('<circle cx="12" cy="12" r="9"/><path d="M12 10v6"/><path d="M12 7h.01"/>'), label: "Info" },
+            { svg: svgStroke('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>'), label: "Search" },
+            { svg: svgFill('<path d="M3 4h18l-7 8v6l-4 2v-8z"/>'), label: "Filter" },
+            { svg: svgStroke('<circle cx="12" cy="12" r="3"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="M2 12h3"/><path d="M19 12h3"/><path d="M4.5 4.5l2 2"/><path d="M17.5 17.5l2 2"/><path d="M4.5 19.5l2-2"/><path d="M17.5 6.5l2-2"/>'), label: "Settings" },
+            { svg: svgFill('<rect x="6" y="11" width="12" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3z"/>'), label: "Lock" },
+            { svg: svgFill('<rect x="6" y="11" width="12" height="9" rx="2"/><path d="M14 11V8a4 4 0 0 0-7.5-2"/>'), label: "Unlock" },
+            { svg: svgStroke('<path d="M1 12s4-6 11-6 11 6 11 6-4 6-11 6S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>'), label: "Eye" },
+            { svg: svgStroke('<path d="M2 2l20 20"/><path d="M1 12s4-6 11-6c2.1 0 4 .5 5.6 1.3"/><path d="M23 12s-4 6-11 6c-2.1 0-4-.5-5.6-1.3"/>'), label: "EyeOff" },
+            { svg: svgStroke('<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/>'), label: "Download" },
+            { svg: svgStroke('<path d="M12 21V9"/><path d="M7 12l5-5 5 5"/><path d="M5 3h14"/>'), label: "Upload" },
+            { svg: svgStroke('<path d="M3 12a9 9 0 0 1 15-6"/><path d="M18 4h-4V0"/><path d="M21 12a9 9 0 0 1-15 6"/><path d="M6 20h4v4"/>'), label: "Refresh" },
+            { svg: svgStroke('<path d="M3 21l3-1 11-11-2-2L4 18l-1 3z"/><path d="M14 4l2 2"/>'), label: "Edit" },
+            { svg: svgStroke('<path d="M12 5v14"/><path d="M5 12h14"/>'), label: "Plus" },
+            { svg: svgStroke('<path d="M5 12h14"/>'), label: "Minus" },
+            { svg: svgStroke('<path d="M12 4v16"/><path d="M6 10l6-6 6 6"/>'), label: "ArrowUp" },
+            { svg: svgStroke('<path d="M12 20V4"/><path d="M6 14l6 6 6-6"/>'), label: "ArrowDown" },
+            { svg: svgStroke('<path d="M4 12h16"/><path d="M10 6l-6 6 6 6"/>'), label: "ArrowLeft" },
+            { svg: svgStroke('<path d="M20 12H4"/><path d="M14 6l6 6-6 6"/>'), label: "ArrowRight" },
+            { svg: svgStroke('<path d="M6 14l6-6 6 6"/>'), label: "ChevronUp" },
+            { svg: svgStroke('<path d="M6 10l6 6 6-6"/>'), label: "ChevronDown" },
+            { svg: svgStroke('<path d="M14 6l-6 6 6 6"/>'), label: "ChevronLeft" },
+            { svg: svgStroke('<path d="M10 6l6 6-6 6"/>'), label: "ChevronRight" },
+            { svg: svgFill('<path d="M6 4l12 8-12 8z"/>'), label: "Play" },
+            { svg: svgFill('<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>'), label: "Pause" },
+            { svg: svgFill('<rect x="6" y="6" width="12" height="12"/>'), label: "Stop" },
+            { svg: svgFill('<path d="M3 6h7l2 2h9v10H3z"/>'), label: "Folder" },
+            { svg: svgFill('<path d="M6 2h8l4 4v16H6z"/>'), label: "File" },
+            { svg: svgStroke('<path d="M3 17l6-6 4 3 7-8"/><path d="M3 21h18"/>'), label: "Chart" },
+            { svg: svgFill('<rect x="4" y="12" width="3" height="8"/><rect x="10" y="8" width="3" height="12"/><rect x="16" y="4" width="3" height="16"/>'), label: "Bar" },
+            { svg: svgFill('<path d="M12 2a10 10 0 1 0 10 10H12z"/>'), label: "Pie" },
+            { svg: svgStroke('<path d="M3 17l5-5 4 3 7-8"/>'), label: "Line" },
+            { svg: svgStroke('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18"/><path d="M12 3a15 15 0 0 0 0 18"/>'), label: "Globe" },
+            { svg: svgFill('<path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/>'), label: "Pin" },
+            { svg: svgFill('<rect x="4" y="7" width="16" height="12" rx="2"/><rect x="9" y="4" width="6" height="3"/>'), label: "Briefcase" },
+            { svg: svgStroke('<circle cx="9" cy="20" r="1"/><circle cx="17" cy="20" r="1"/><path d="M3 4h2l3 12h10l2-8H7"/>'), label: "Cart" },
+            { svg: svgStroke('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/>'), label: "Credit" },
+            { svg: svgFill('<path d="M12 2l8 4v6c0 5-4 9-8 10-4-1-8-5-8-10V6z"/>'), label: "Shield" },
+            { svg: svgFill('<path d="M12 2a6 6 0 0 0-6 6v4l-2 3v3h16v-3l-2-3V8a6 6 0 0 0-6-6zm0 20a3 3 0 0 0 3-3H9a3 3 0 0 0 3 3z"/>'), label: "Bell" },
+            { svg: svgFill('<path d="M4 4h16v11H7l-3 3z"/>'), label: "Message" },
+            { svg: svgStroke('<circle cx="12" cy="12" r="4"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="M2 12h3"/><path d="M19 12h3"/><path d="M4.5 4.5l2 2"/><path d="M17.5 17.5l2 2"/><path d="M4.5 19.5l2-2"/><path d="M17.5 6.5l2-2"/>'), label: "Sun" },
+            { svg: svgFill('<path d="M14 2a9 9 0 0 0 0 18 9 9 0 0 1 0-18z"/>'), label: "Moon" },
+            { svg: svgFill('<path d="M13 2L4 14h6l-1 8 9-12h-6z"/>'), label: "Bolt" },
+            { svg: svgStroke('<circle cx="7" cy="7" r="2"/><circle cx="17" cy="17" r="2"/><path d="M5 19L19 5"/>'), label: "Percent" },
+            { svg: svgStroke('<path d="M10 13a5 5 0 0 1 0-7l2-2a5 5 0 0 1 7 7l-1 1"/><path d="M14 11a5 5 0 0 1 0 7l-2 2a5 5 0 0 1-7-7l1-1"/>'), label: "Link" },
+            { svg: svgStroke('<path d="M3 6l7-3 7 3 4-2v14l-4 2-7-3-7 3-4-2V4z"/>'), label: "Map" },
+            { svg: svgStroke('<rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/>'), label: "Grid" },
+            { svg: svgStroke('<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>'), label: "List" },
+            { svg: svgFill('<path d="M6 3h12v18l-6-4-6 4z"/>'), label: "Bookmark" },
+            { svg: svgFill('<path d="M12 21s-7-4.5-9-8a5 5 0 0 1 8-6 5 5 0 0 1 8 6c-2 3.5-7 8-7 8z"/>'), label: "Heart" },
+            { svg: svgStroke('<path d="M4 7h16"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>'), label: "Trash" },
+            { svg: svgStroke('<circle cx="7" cy="12" r="2"/><path d="M9 12h12"/><path d="M19 12v4"/>'), label: "Key" }
+        ];
+
         const variants: Record<IAdvancedColumn["dataType"], Array<{ svg: string; label: string }>> = {
             text: [
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><text x="50%" y="50%" text-anchor="middle" dy=".3em" style="font-size:12px;font-weight:bold">Aa</text></svg>', label: "Aa" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M3 4h18c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H3c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zm0 2v12h18V6H3zm2 3h14v2H5V9zm0 4h14v2H5v-2z"/></svg>', label: "Doc" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>', label: "A+" },
+                { svg: svgFill('<text x="50%" y="50%" text-anchor="middle" dy=".3em" style="font-size:12px;font-weight:bold">Aa</text>'), label: "Aa" },
+                { svg: svgFill('<path d="M3 4h18c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H3c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zm0 2v12h18V6H3zm2 3h14v2H5V9zm0 4h14v2H5v-2z"/>'), label: "Doc" },
+                { svg: svgFill('<path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>'), label: "A+" },
+                { svg: svgFill('<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M7 9h10v2H7zM7 13h6v2H7z"/>'), label: "Card" }
             ],
             number: [
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M2 3h20v2H2zm0 8h20v2H2zm0 8h20v2H2z"/></svg>', label: "123" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>', label: "Bar" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M3 13h2v8H3zm3-8h2v16H6zm3-2h2v18H9zm3 5h2v13h-2zm3-3h2v16h-2zm3 4h2v12h-2z"/></svg>', label: "#" },
+                { svg: svgFill('<path d="M2 3h20v2H2zm0 8h20v2H2zm0 8h20v2H2z"/>'), label: "123" },
+                { svg: svgFill('<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>'), label: "Bar" },
+                { svg: svgFill('<path d="M3 13h2v8H3zm3-8h2v16H6zm3-2h2v18H9zm3 5h2v13h-2zm3-3h2v16h-2zm3 4h2v12h-2z"/>'), label: "#" },
+                { svg: svgFill('<path d="M4 19h16v2H4z" opacity=".2"/><path d="M5 11h3v6H5zm5-4h3v10h-3zm5 3h3v7h-3z"/>'), label: "KPI" }
             ],
             date: [
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M7 2c-1.1 0-2 .9-2 2v3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2h-2V4c0-1.1-.9-2-2-2s-2 .9-2 2v3H9V4c0-1.1-.9-2-2-2zm0 6h14v10H7V8z"/></svg>', label: "Cal" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>', label: "Time" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 9h10v2H7z"/></svg>', label: "Date" },
+                { svg: svgFill('<path d="M7 2c-1.1 0-2 .9-2 2v3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2h-2V4c0-1.1-.9-2-2-2s-2 .9-2 2v3H9V4c0-1.1-.9-2-2-2zm0 6h14v10H7V8z"/>'), label: "Cal" },
+                { svg: svgFill('<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>'), label: "Time" },
+                { svg: svgFill('<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 9h10v2H7z"/>'), label: "Date" },
+                { svg: svgFill('<path d="M4 4h16v2H4zm2 4h12v2H6zm-2 4h16v2H4zm2 4h8v2H6z"/>'), label: "Timeline" }
             ],
             currency: [
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>', label: "$" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M5 9.2h3V7H5zM19.1 7c-1 1-1 1-2 2h2V7zM3 11h2v10H3zm16 0h2v10h-2zm2-6h-1V3c0-1-1-1-1-1h-4c-1 0-1 0-1 1v2h-4V3c0-1-1-1-1-1H4c-1 0-1 0-1 1v2H2c-1 0-2 1-2 2v14c0 1 1 2 2 2h20c1 0 2-1 2-2V7c0-1-1-2-2-2z"/></svg>', label: "Card" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M11.8 10.9c-2.27-.59-3.5-1.38-3.5-2.49 0-1.02.88-2.11 2.48-2.11 1.45 0 2.724.75 2.882 1.72h1.6A4.464 4.464 0 0012.6 3c-2.52 0-4.29 1.93-4.29 4.26 0 2.05 1.53 3.76 3.3 4.03v2.26c-.56.09-1.08.33-1.54.72h-2.2c-.44-.58-1.04-1.02-1.73-1.27-.3-.1-.53-.35-.53-.61 0-.41.35-.74.77-.74.19 0 .37.06.52.16 1.4.91 2.46 2.17 3.18 3.61h2.26c.73-1.44 1.79-2.7 3.18-3.61.15-.1.33-.16.52-.16.42 0 .77.33.77.74 0 .26-.23.51-.53.61-.69.25-1.29.69-1.73 1.27h-2.2c-.46-.39-.98-.63-1.54-.72v-2.26c1.77-.27 3.3-1.98 3.3-4.03 0-2.33-1.77-4.26-4.29-4.26-.92 0-1.78.18-2.54.52h1.6c.16.97 1.44 1.72 2.88 1.72 1.6 0 2.48-1.09 2.48-2.11 0-1.11-1.23-1.9-3.5-2.49z"/></svg>', label: "Moeda" },
+                { svg: svgFill('<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/>'), label: "$" },
+                { svg: svgFill('<path d="M5 9.2h3V7H5zM19.1 7c-1 1-1 1-2 2h2V7zM3 11h2v10H3zm16 0h2v10h-2zm2-6h-1V3c0-1-1-1-1-1h-4c-1 0-1 0-1 1v2h-4V3c0-1-1-1-1-1H4c-1 0-1 0-1 1v2H2c0-1-2 1-2 2v14c0 1 1 2 2 2h20c1 0 2-1 2-2V7c0-1-1-2-2-2z"/>'), label: "Card" },
+                { svg: svgFill('<path d="M11.8 10.9c-2.27-.59-3.5-1.38-3.5-2.49 0-1.02.88-2.11 2.48-2.11 1.45 0 2.724.75 2.882 1.72h1.6A4.464 4.464 0 0012.6 3c-2.52 0-4.29 1.93-4.29 4.26 0 2.05 1.53 3.76 3.3 4.03v2.26c-.56.09-1.08.33-1.54.72h-2.2c-.44-.58-1.04-.02-1.73-1.27-.3-.1-.53-.35-.53-.61 0-.41.35-.74.77-.74.19 0 .37.06.52.16 1.4.91 2.46 2.17 3.18 3.61h2.26c.73-1.44 1.79-2.7 3.18-3.61.15-.1.33-.16.52-.16.42 0 .77.33.77.74 0 .26-.23.51-.53.61-.69.25-1.29.69-1.73 1.27h-2.2c-.46-.39-.98-.63-1.54-.72v-2.26c1.77-.27 3.3-1.98 3.3-4.03 0-2.33-1.77-4.26-4.29-4.26-.92 0-1.78.18-2.54.52h1.6c.16.97 1.44 1.72 2.88 1.72 1.6 0 2.48-1.09 2.48-2.11 0-1.11-1.23-1.9-3.5-2.49z"/>'), label: "Coin" }
             ],
             percentage: [
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M3 13h2v2H3zm4-8h2v12H7zm3 1h2v14h-2zm3-3h2v16h-2zm3 2h2v14h-2zM18 4h2v18h-2z"/></svg>', label: "Chart" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>', label: "%" },
+                { svg: svgFill('<path d="M3 13h2v2H3zm4-8h2v12H7zm3 1h2v14h-2zm3-3h2v16h-2zm3 2h2v14h-2zM18 4h2v18h-2z"/>'), label: "Chart" },
+                { svg: svgFill('<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/>'), label: "%" },
                 { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="1"></circle><circle cx="18" cy="18" r="1"></circle><line x1="4" y1="20" x2="20" y2="4"></line></svg>', label: "Ratio" },
+                { svg: svgFill('<path d="M4 18h16v2H4z" opacity=".2"/><path d="M6 10h3v6H6zm4-3h3v9h-3zm4-2h3v11h-3z"/>'), label: "Goal" }
             ],
             boolean: [
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>', label: "✓" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/></svg>', label: "✗" },
-                { svg: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-4c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4z"/></svg>', label: "Toggle" },
+                { svg: svgFill('<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>'), label: "Check" },
+                { svg: svgFill('<path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>'), label: "X" },
+                { svg: svgFill('<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-4c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4z"/>'), label: "Toggle" }
             ],
         };
 
-        return variants[dataType] || variants.text;
+        const byType = variants[dataType] || variants.text;
+        return [...byType, ...commonVariants];
     }
 
 

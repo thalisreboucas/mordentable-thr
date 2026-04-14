@@ -42,6 +42,9 @@
                 },
                 "fontSize": {
                     "type": { "formatting": { "fontSize": true } }
+                },
+                "resetTheme": {
+                    "type": { "bool": true }
                 }
             }
         },
@@ -84,8 +87,8 @@
                 "showHeaderFilter": {
                     "type": { "bool": true }
                 },
-                "enableEditing": {
-                    "type": { "bool": true }
+                "onObjectState": {
+                    "type": { "text": true }
                 },
                 "showRowNumbers": {
                     "type": { "bool": true }
@@ -111,6 +114,12 @@
                     "type": { "numeric": true }
                 },
                 "headerHeight": {
+                    "type": { "numeric": true }
+                },
+                "tableWidthPx": {
+                    "type": { "numeric": true }
+                },
+                "tableHeightPx": {
                     "type": { "numeric": true }
                 }
             }
