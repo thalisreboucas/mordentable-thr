@@ -133,7 +133,8 @@ export class Visual implements IVisual {
                     selector: undefined as any,
                     properties: {
                         // apaga todas as edições on-object (colunas, ícones, barras, etc.)
-                        onObjectState: ""
+                        onObjectState: "",
+                        enableAnalyticsCellVisuals: false
                     }
                 },
                 {
@@ -334,6 +335,7 @@ export class Visual implements IVisual {
             enableColumnResize: columnsIconsConfig?.enableColumnResize?.value !== false,
             showRowNumbers: tableFeaturesConfig?.showRowNumbers?.value === true,
             enableRowSelection: tableFeaturesConfig?.enableRowSelection?.value === true,
+            enableAnalyticsCellVisuals: tableFeaturesConfig?.enableAnalyticsCellVisuals?.value === true,
 
             enableConditionalFormatting: true,
         };

@@ -33,6 +33,7 @@ export interface IAdvancedColumn {
     cellStyle?: "text" | "badge" | "progress";
     badgeShape?: "rectangle" | "oval";
     badgePalette?: "soft" | "vivid";
+    pinned?: "left" | "right" | null;
 }
 
 type ColumnFormattingOverride = Partial<Pick<
@@ -51,6 +52,11 @@ type ColumnIconOverride = {
 
 type RangeFilter = { min?: number | null; max?: number | null };
 type InFilter = { in: string[] };
+type OperatorFilter = {
+    op: "contains" | "equals" | "notEquals" | "startsWith" | "endsWith";
+    value: string;
+};
+type SortDescriptor = { columnName: string; direction: "asc" | "desc" };
 
 export interface IAdvancedRow {
     id: string | number;
@@ -85,6 +91,21 @@ export interface IConditionalFormat {
 }
 
 type MatrixCalcMode = "sum" | "average" | "count" | "min" | "max";
+type PerformanceManagedKey =
+    | "spacingMode"
+    | "rowHeight"
+    | "headerHeight"
+    | "fontSize"
+    | "showHeaderFilter"
+    | "showQuickFilter"
+    | "showColumnIcons"
+    | "enablePagination"
+    | "borderless"
+    | "striped"
+    | "enableConditionalFormatting"
+    | "enableAnalyticsCellVisuals";
+type PerformancePreset = "default" | "performance" | "balanced" | "presentation" | "custom";
+type PerformanceOverrides = Partial<Pick<IAdvancedTableConfig, PerformanceManagedKey>>;
 
 type OnObjectPersistedState = {
     version: 1;
@@ -92,6 +113,7 @@ type OnObjectPersistedState = {
     columnDisplayNameOverrides?: Record<string, string>;
     conditionalFormats?: IConditionalFormat[];
     columnIconOverrides?: Record<string, ColumnIconOverride>;
+    columnPinOverrides?: Record<string, "left" | "right" | null>;
 };
 
 export interface IAdvancedTableConfig {
@@ -109,6 +131,7 @@ export interface IAdvancedTableConfig {
     // Filtering — value can be a string (text) or {min, max} (range)
     filters: Map<string, any>;
     showHeaderFilter: boolean;
+    showQuickFilter: boolean;
 
     // Grouping
     enableGrouping: boolean;
@@ -158,6 +181,7 @@ export interface IAdvancedTableConfig {
     enableColumnResize: boolean;
     showRowNumbers: boolean;
     enableRowSelection: boolean;
+    enableAnalyticsCellVisuals: boolean;
 }
 
 export class AdvancedModernTable {
@@ -180,6 +204,7 @@ export class AdvancedModernTable {
     private activeConditionalPanelColName: string | null = null;
     private activeColumnFormatPanelColName: string | null = null;
     private columnWidthsPx: Map<string, number> = new Map();
+    private autoColumnWidthsPx: Map<string, number> = new Map();
     private columnFormattingOverrides: Map<string, ColumnFormattingOverride> = new Map();
     private columnFormattingBase: Map<string, ColumnFormattingOverride> = new Map();
     private columnDisplayNameOverrides: Map<string, string> = new Map();
@@ -189,7 +214,14 @@ export class AdvancedModernTable {
     private matrixColumnCalculationModes: Map<string, MatrixCalcMode> = new Map();
     private matrixRowCalculationModes: Map<string, MatrixCalcMode> = new Map();
     private columnIconOverrides: Map<string, ColumnIconOverride> = new Map();
+    private columnPinOverrides: Map<string, "left" | "right" | null> = new Map();
     private dataBarStats: Map<string, { min: number; max: number }> = new Map();
+    private sortModel: SortDescriptor[] = [];
+    private quickFilterText: string = "";
+    private performancePanelOpen: boolean = false;
+    private performancePreset: PerformancePreset = "default";
+    private performanceOverrides: PerformanceOverrides = {};
+    private performanceBaseConfig: PerformanceOverrides = {};
     private onObjectStateChanged?: (state: string) => void;
 
     constructor(
@@ -213,6 +245,7 @@ export class AdvancedModernTable {
             sortDirection: "asc",
             filters: new Map(),
             showHeaderFilter: true,
+            showQuickFilter: true,
             enableGrouping: false,
             groupByColumnName: null,
             enableCalculatedRows: true,
@@ -250,6 +283,7 @@ export class AdvancedModernTable {
             enableColumnResize: true,
             showRowNumbers: false,
             enableRowSelection: false,
+            enableAnalyticsCellVisuals: false,
             ...overrides
         };
     }
@@ -269,6 +303,9 @@ export class AdvancedModernTable {
             });
             if (clickedInsidePanel) return;
 
+            const modeSwitcher = this.container.querySelector(".mt-mode-switcher");
+            if (modeSwitcher && modeSwitcher.contains(target)) return;
+
             const filterBtns = this.container.querySelectorAll(".mt-filter-btn, .mt-colfmt-btn, .mt-matrix-menu-trigger");
             let clickedBtn = false;
             filterBtns.forEach(btn => { if (btn.contains(target)) clickedBtn = true; });
@@ -277,6 +314,7 @@ export class AdvancedModernTable {
                 this.closeConditionalPanel();
                 this.closeColumnFormatPanel();
                 this.closeMatrixMenu();
+                this.setPerformancePanelOpen(false);
             }
         };
         document.addEventListener("mousedown", this.outsideClickHandler);
@@ -314,9 +352,76 @@ export class AdvancedModernTable {
             const displayNameOverride = this.columnDisplayNameOverrides.get(col.name);
             const displayName = displayNameOverride ?? col.displayName;
             const iconOverride = this.columnIconOverrides.get(col.name);
+            const pinned = this.columnPinOverrides.get(col.name) ?? col.pinned ?? null;
             const customIcon = iconOverride?.svg ?? col.customIcon;
-            return { ...col, ...override, customIcon, displayName, index: idx };
+            return { ...col, ...override, customIcon, pinned, displayName, index: idx };
         });
+    }
+
+    private getRenderableColumns(): IAdvancedColumn[] {
+        const visible = this.columns.filter(c => c.visible);
+        const left = visible.filter(c => c.pinned === "left");
+        const center = visible.filter(c => c.pinned !== "left" && c.pinned !== "right");
+        const right = visible.filter(c => c.pinned === "right");
+        return [...left, ...center, ...right];
+    }
+
+    private recomputeAutoColumnWidths(): void {
+        const cols = this.getRenderableColumns();
+        if (!cols.length) {
+            this.autoColumnWidthsPx.clear();
+            return;
+        }
+
+        const sampleRows = this.rows.slice(0, Math.min(this.rows.length, 120));
+        const chromeWidth = (this.config.showRowNumbers ? 44 : 0) + (this.config.enableRowSelection ? 44 : 0) + 16;
+        const containerWidth = Math.max(320, this.container.clientWidth || 920);
+        const availableWidth = Math.max(220, containerWidth - chromeWidth);
+
+        const minByCol = new Map<string, number>();
+        const widths = new Map<string, number>();
+
+        cols.forEach((col) => {
+            const minWidth = Math.max(72, col.minWidth ?? 96);
+            const maxWidth = Math.max(220, Math.floor(availableWidth * 0.42));
+
+            let maxChars = String(col.displayName || col.name || "").length;
+            sampleRows.forEach((row) => {
+                const raw = row.values[col.index];
+                const txt = this.formatCellValue(raw, col);
+                maxChars = Math.max(maxChars, String(txt || "").length);
+            });
+
+            // ~7px per glyph + room for paddings, icons and sort/filter affordances.
+            const estimated = Math.ceil((maxChars * 7) + 48);
+            const normalized = Math.max(minWidth, Math.min(maxWidth, estimated));
+
+            minByCol.set(col.name, minWidth);
+            widths.set(col.name, normalized);
+        });
+
+        const total = Array.from(widths.values()).reduce((acc, w) => acc + w, 0);
+        if (total > availableWidth && cols.length > 1) {
+            const scale = availableWidth / total;
+            cols.forEach((col) => {
+                const current = widths.get(col.name) || 0;
+                const minW = minByCol.get(col.name) || 72;
+                const scaled = Math.max(minW, Math.floor(current * scale));
+                widths.set(col.name, scaled);
+            });
+        }
+
+        // Keep the grid aligned with container width: the last visible column
+        // absorbs any remaining horizontal space.
+        const adjustedTotal = Array.from(widths.values()).reduce((acc, w) => acc + w, 0);
+        if (adjustedTotal < availableWidth && cols.length > 0) {
+            const lastCol = cols[cols.length - 1];
+            const growBy = availableWidth - adjustedTotal;
+            const current = widths.get(lastCol.name) || 0;
+            widths.set(lastCol.name, current + growBy);
+        }
+
+        this.autoColumnWidthsPx = widths;
     }
 
     private getEffectiveShowColumnIcons(colName: string): boolean {
@@ -337,6 +442,10 @@ export class AdvancedModernTable {
         const preservedFilters = newConfig.filters ?? this.config.filters;
         this.config = { ...this.config, ...newConfig, filters: preservedFilters };
 
+        if (Object.keys(this.performanceOverrides).length > 0) {
+            this.config = { ...this.config, ...this.performanceOverrides };
+        }
+
         if (!this.config.enablePagination) {
             this.config.currentPage = 1;
         } else {
@@ -353,6 +462,7 @@ export class AdvancedModernTable {
             this.columnDisplayNameOverrides.clear();
             this.conditionalFormats = [];
             this.columnIconOverrides.clear();
+            this.columnPinOverrides.clear();
             return;
         }
 
@@ -370,6 +480,9 @@ export class AdvancedModernTable {
             this.columnIconOverrides = new Map<string, ColumnIconOverride>(
                 Object.entries(parsed.columnIconOverrides || {})
             );
+            this.columnPinOverrides = new Map<string, "left" | "right" | null>(
+                Object.entries(parsed.columnPinOverrides || {})
+            );
         } catch {
             // Ignore invalid persisted payload and continue with runtime state.
         }
@@ -381,7 +494,8 @@ export class AdvancedModernTable {
             columnFormattingOverrides: Object.fromEntries(this.columnFormattingOverrides.entries()),
             columnDisplayNameOverrides: Object.fromEntries(this.columnDisplayNameOverrides.entries()),
             conditionalFormats: this.conditionalFormats,
-            columnIconOverrides: Object.fromEntries(this.columnIconOverrides.entries())
+            columnIconOverrides: Object.fromEntries(this.columnIconOverrides.entries()),
+            columnPinOverrides: Object.fromEntries(this.columnPinOverrides.entries())
         };
         return JSON.stringify(state);
     }
@@ -403,6 +517,7 @@ export class AdvancedModernTable {
         const isEmpty = filter === null || filter === undefined ||
             (typeof filter === "string" && !filter.trim()) ||
             (this.isRangeFilter(filter) && filter.min == null && filter.max == null) ||
+            (this.isOperatorFilter(filter) && !String(filter.value || "").trim()) ||
             (typeof filter === "object" && !this.isRangeFilter(filter) && !this.isInFilter(filter) && Object.keys(filter).length === 0);
         if (isEmpty) {
             this.config.filters.delete(columnName);
@@ -415,9 +530,76 @@ export class AdvancedModernTable {
     }
 
     public setSorting(columnName: string, direction: "asc" | "desc"): void {
+        this.setSortingModel(columnName, direction, false);
+    }
+
+    public setSortingModel(columnName: string, direction: "asc" | "desc", append: boolean): void {
+        if (append) {
+            const existingIndex = this.sortModel.findIndex(s => s.columnName === columnName);
+            if (existingIndex >= 0) {
+                this.sortModel[existingIndex] = { columnName, direction };
+            } else {
+                this.sortModel.push({ columnName, direction });
+            }
+        } else {
+            this.sortModel = [{ columnName, direction }];
+        }
+
+        // Keep legacy fields synced for compatibility with existing UI logic.
         this.config.sortColumn = columnName;
         this.config.sortDirection = direction;
         this.applySorting();
+    }
+
+    public clearSorting(): void {
+        this.sortModel = [];
+        this.config.sortColumn = null;
+        this.config.sortDirection = "asc";
+        this.applySorting();
+    }
+
+    public setQuickFilter(value: string): void {
+        this.quickFilterText = String(value || "").trim().toLowerCase();
+        this.config.currentPage = 1;
+        this.applyFilters();
+        this.applySorting();
+    }
+
+    public clearAllFilters(): void {
+        this.config.filters.clear();
+        this.quickFilterText = "";
+        this.config.currentPage = 1;
+        this.applyFilters();
+        this.applySorting();
+    }
+
+    public exportVisibleToCsv(fileName: string = "modern-table.csv"): void {
+        const rows = this.getPagedRows();
+        const visibleColumns = this.getRenderableColumns();
+
+        const escapeCsv = (val: any): string => {
+            const text = String(val ?? "");
+            if (/["\n,;]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+            return text;
+        };
+
+        const header = visibleColumns.map(col => escapeCsv(col.displayName)).join(",");
+        const body = rows
+            .filter(row => row.rowType !== "group")
+            .map(row => visibleColumns.map(col => escapeCsv(this.formatCellValue(row.values[col.index], col))).join(","))
+            .join("\n");
+
+        const csv = `${header}\n${body}`;
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     }
 
     public goToPage(pageNumber: number): void {
@@ -441,12 +623,28 @@ export class AdvancedModernTable {
 
     private applyFilters(): void {
         this.rows = this.allRows.filter(row => {
+            if (this.quickFilterText) {
+                const searchable = this.columns
+                    .filter(c => c.visible)
+                    .map(c => this.formatCellValue(row.values[c.index], c))
+                    .join(" ")
+                    .toLowerCase();
+
+                if (!searchable.includes(this.quickFilterText)) {
+                    return false;
+                }
+            }
+
             for (const [colName, filter] of this.config.filters) {
                 const col = this.columns.find(c => c.name === colName);
                 if (!col) continue;
                 const rawValue = row.values[col.index];
                 if (typeof filter === "string") {
                     if (!String(rawValue ?? "").toLowerCase().includes(filter.toLowerCase())) {
+                        return false;
+                    }
+                } else if (this.isOperatorFilter(filter)) {
+                    if (!this.matchesOperatorFilter(rawValue, col, filter)) {
                         return false;
                     }
                 } else if (this.isInFilter(filter)) {
@@ -495,6 +693,29 @@ export class AdvancedModernTable {
         return !!filter && typeof filter === "object" && Array.isArray((filter as any).in);
     }
 
+    private isOperatorFilter(filter: any): filter is OperatorFilter {
+        return !!filter && typeof filter === "object" && typeof filter.op === "string" && "value" in filter;
+    }
+
+    private matchesOperatorFilter(rawValue: any, col: IAdvancedColumn, filter: OperatorFilter): boolean {
+        const normalizedValue = this.formatCellValue(rawValue, col).toLowerCase();
+        const target = String(filter.value || "").toLowerCase();
+
+        switch (filter.op) {
+            case "equals":
+                return normalizedValue === target;
+            case "notEquals":
+                return normalizedValue !== target;
+            case "startsWith":
+                return normalizedValue.startsWith(target);
+            case "endsWith":
+                return normalizedValue.endsWith(target);
+            case "contains":
+            default:
+                return normalizedValue.includes(target);
+        }
+    }
+
     private getFilterValueKey(value: any): string {
         if (value === null || value === undefined) return "__null__";
         if (value instanceof Date) return `d:${value.getTime()}`;
@@ -521,6 +742,10 @@ export class AdvancedModernTable {
                     if (!String(rawValue ?? "").toLowerCase().includes(filter.toLowerCase())) {
                         return false;
                     }
+                } else if (this.isOperatorFilter(filter)) {
+                    if (!this.matchesOperatorFilter(rawValue, col, filter)) {
+                        return false;
+                    }
                 } else if (this.isInFilter(filter)) {
                     const key = this.getFilterValueKey(rawValue);
                     if (!filter.in.includes(key)) {
@@ -539,22 +764,42 @@ export class AdvancedModernTable {
     }
 
     private applySorting(): void {
-        if (!this.config.sortColumn) return;
-        const col = this.columns.find(c => c.name === this.config.sortColumn);
-        if (!col) return;
-        const idx = col.index;
+        const descriptors = this.sortModel.length > 0
+            ? this.sortModel
+            : (this.config.sortColumn ? [{ columnName: this.config.sortColumn, direction: this.config.sortDirection }] : []);
+
+        if (!descriptors.length) return;
+
+        const normalized = descriptors
+            .map(desc => {
+                const col = this.columns.find(c => c.name === desc.columnName);
+                if (!col) return null;
+                return { index: col.index, direction: desc.direction };
+            })
+            .filter(Boolean) as Array<{ index: number; direction: "asc" | "desc" }>;
+
+        if (!normalized.length) return;
+
         this.rows.sort((a, b) => {
-            const av = this.normalizeSortValue(a.values[idx]);
-            const bv = this.normalizeSortValue(b.values[idx]);
-            let cmp = 0;
-            if (typeof av === "number" && typeof bv === "number") {
-                cmp = av - bv;
-            } else if (av instanceof Date && bv instanceof Date) {
-                cmp = av.getTime() - bv.getTime();
-            } else {
-                cmp = String(av ?? "").localeCompare(String(bv ?? ""), "pt-BR");
+            for (const desc of normalized) {
+                const av = this.normalizeSortValue(a.values[desc.index]);
+                const bv = this.normalizeSortValue(b.values[desc.index]);
+                let cmp = 0;
+
+                if (typeof av === "number" && typeof bv === "number") {
+                    cmp = av - bv;
+                } else if (av instanceof Date && bv instanceof Date) {
+                    cmp = av.getTime() - bv.getTime();
+                } else {
+                    cmp = String(av ?? "").localeCompare(String(bv ?? ""), "pt-BR");
+                }
+
+                if (cmp !== 0) {
+                    return desc.direction === "asc" ? cmp : -cmp;
+                }
             }
-            return this.config.sortDirection === "asc" ? cmp : -cmp;
+
+            return 0;
         });
     }
 
@@ -852,6 +1097,94 @@ export class AdvancedModernTable {
         return icons[variant] || "";
     }
 
+    private isTimelineVisualColumn(col: IAdvancedColumn): boolean {
+        const key = `${col.name} ${col.displayName}`.toLowerCase();
+        return key.includes("timeline") || key.includes("tendencia") || key.includes("spark");
+    }
+
+    private isFinanceMetricVisualColumn(col: IAdvancedColumn): boolean {
+        const key = `${col.name} ${col.displayName}`.toLowerCase();
+        return key.includes("p&l")
+            || key.includes("pnl")
+            || key.includes("total value")
+            || key.includes("valor total");
+    }
+
+    private resolveSparklineData(value: any, row: IAdvancedRow, col: IAdvancedColumn): number[] {
+        if (Array.isArray(value)) {
+            const nums = value.map(v => Number(v)).filter(v => !isNaN(v));
+            if (nums.length >= 2) return nums;
+        }
+
+        if (typeof value === "string") {
+            const parts = value.split(/[;,|\s]+/g).map(v => Number(v)).filter(v => !isNaN(v));
+            if (parts.length >= 2) return parts;
+        }
+
+        const seed = `${row.id}|${col.name}|${value ?? ""}`;
+        const points: number[] = [];
+        let base = 40 + (this.hashString(seed) % 30);
+        for (let i = 0; i < 24; i += 1) {
+            const drift = ((this.hashString(`${seed}:${i}`) % 11) - 5);
+            base = Math.max(5, Math.min(95, base + drift));
+            points.push(base);
+        }
+        return points;
+    }
+
+    private appendSparklineCell(td: HTMLElement, data: number[]): void {
+        td.classList.add("mt-td-sparkline");
+
+        const wrap = document.createElement("div");
+        wrap.className = "mt-sparkline";
+
+        const min = Math.min(...data);
+        const max = Math.max(...data);
+        const denom = max - min || 1;
+
+        data.forEach((point) => {
+            const bar = document.createElement("span");
+            bar.className = "mt-sparkline-bar";
+            const normalized = (point - min) / denom;
+            const h = 14 + Math.round(normalized * 24);
+            bar.style.height = `${h}px`;
+            wrap.appendChild(bar);
+        });
+
+        td.appendChild(wrap);
+    }
+
+    private appendFinanceMetricCell(td: HTMLElement, value: any, formatted: string): void {
+        td.classList.add("mt-td-finmetric");
+
+        const n = typeof value === "number" ? value : Number(String(value).replace(/[^0-9,.-]/g, "").replace(",", "."));
+        const isNumber = !isNaN(n);
+
+        const valueEl = document.createElement("span");
+        valueEl.className = "mt-finmetric-value";
+        valueEl.textContent = formatted;
+
+        if (isNumber) {
+            if (n > 0) valueEl.classList.add("mt-finmetric-positive");
+            else if (n < 0) valueEl.classList.add("mt-finmetric-negative");
+            else valueEl.classList.add("mt-finmetric-neutral");
+        }
+
+        const badge = document.createElement("span");
+        badge.className = "mt-finmetric-badge";
+        if (isNumber) {
+            const secondary = Math.abs(n) < 1000
+                ? Math.abs(n).toFixed(2)
+                : (Math.abs(n) / 1000).toFixed(2) + "K";
+            badge.textContent = secondary;
+        } else {
+            badge.textContent = formatted;
+        }
+
+        td.appendChild(valueEl);
+        td.appendChild(badge);
+    }
+
     // ─── Main Render ──────────────────────────────────────────────────────────
 
     public render(): void {
@@ -872,6 +1205,9 @@ export class AdvancedModernTable {
 
         this.applyThemeVariables();
 
+        this.renderQuickActionsToolbar();
+        this.recomputeAutoColumnWidths();
+
         const wrapper = document.createElement("div");
         wrapper.className = "mt-table-wrapper";
         this.applyTableDimensions(wrapper);
@@ -880,14 +1216,383 @@ export class AdvancedModernTable {
         table.className = "mt-table";
         table.setAttribute("role", "table");
 
-        const autoColumnWidths = new Map<string, number>();
-        this.renderHeader(table, autoColumnWidths);
-        this.renderTableBody(table, autoColumnWidths);
+        if (this.config.enableGrouping && this.getGroupingIndexes().length > 0) {
+            this.renderGroupToolbar();
+        }
+
+        this.renderHeader(table, this.autoColumnWidthsPx);
+        this.renderTableBody(table, this.autoColumnWidthsPx, wrapper);
 
         wrapper.appendChild(table);
         this.container.appendChild(wrapper);
         requestAnimationFrame(() => this.syncComplexHeaderWidths());
         this.renderPagination();
+        this.renderPerformanceModeSwitcher();
+    }
+
+    private renderPerformanceModeSwitcher(): void {
+        const switcher = document.createElement("div");
+        switcher.className = "mt-mode-switcher";
+
+        const trigger = document.createElement("button");
+        trigger.type = "button";
+        trigger.className = "mt-mode-trigger";
+        trigger.title = "Performance: editar tabela inteira";
+        trigger.setAttribute("aria-label", "Performance: editar tabela inteira");
+        trigger.innerHTML = '<span class="mt-mode-trigger-icon" aria-hidden="true">⚡</span>';
+        trigger.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.setPerformancePanelOpen(!this.performancePanelOpen);
+        });
+
+        const menu = document.createElement("div");
+        menu.className = "mt-mode-menu";
+
+        const presets: Array<{ preset: Exclude<PerformancePreset, "custom">; title: string; hint: string }> = [
+            { preset: "performance", title: "Performance", hint: "Mais velocidade, menos carga visual" },
+            { preset: "balanced", title: "Balanceado", hint: "Equilibrio entre leitura e performance" },
+            { preset: "presentation", title: "Apresentacao", hint: "Visual mais completo para demonstracao" }
+        ];
+
+        presets.forEach((item) => {
+            const option = document.createElement("button");
+            option.type = "button";
+            option.className = "mt-mode-option";
+            if (this.performancePreset === item.preset) {
+                option.classList.add("mt-mode-option-active");
+            }
+
+            const title = document.createElement("span");
+            title.className = "mt-mode-option-title";
+            title.textContent = item.title;
+
+            const hint = document.createElement("span");
+            hint.className = "mt-mode-option-hint";
+            hint.textContent = item.hint;
+
+            option.appendChild(title);
+            option.appendChild(hint);
+            option.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.applyPerformancePreset(item.preset);
+            });
+            menu.appendChild(option);
+        });
+
+        const divider = document.createElement("div");
+        divider.className = "mt-mode-divider";
+        menu.appendChild(divider);
+
+        menu.appendChild(this.createPerformanceToggleRow(
+            "Filtros no cabecalho",
+            this.config.showHeaderFilter,
+            (checked) => this.setPerformanceOverride("showHeaderFilter", checked)
+        ));
+        menu.appendChild(this.createPerformanceToggleRow(
+            "Icones das colunas",
+            this.config.showColumnIcons,
+            (checked) => this.setPerformanceOverride("showColumnIcons", checked)
+        ));
+        menu.appendChild(this.createPerformanceToggleRow(
+            "Virtualizacao (desliga paginacao)",
+            !this.config.enablePagination,
+            (checked) => this.setPerformanceOverride("enablePagination", !checked)
+        ));
+        menu.appendChild(this.createPerformanceToggleRow(
+            "Formatacao condicional",
+            this.config.enableConditionalFormatting,
+            (checked) => this.setPerformanceOverride("enableConditionalFormatting", checked)
+        ));
+
+        const disableFiltersBtn = document.createElement("button");
+        disableFiltersBtn.type = "button";
+        disableFiltersBtn.className = "mt-mode-option mt-mode-option-inline";
+        disableFiltersBtn.textContent = "Desativar todos os filtros";
+        disableFiltersBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.disableAllFilters();
+        });
+        menu.appendChild(disableFiltersBtn);
+
+        const compactBtn = document.createElement("button");
+        compactBtn.type = "button";
+        compactBtn.className = "mt-mode-option mt-mode-option-inline";
+        compactBtn.textContent = this.config.spacingMode === "compact" ? "Espacamento: Compacto" : "Usar espacamento compacto";
+        compactBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const useCompact = this.config.spacingMode !== "compact";
+            this.setPerformanceOverrides(
+                {
+                    spacingMode: useCompact ? "compact" : "comfortable",
+                    rowHeight: useCompact ? 30 : 40,
+                    headerHeight: useCompact ? 34 : 44,
+                    fontSize: useCompact ? 12 : 13
+                },
+                "custom"
+            );
+        });
+        menu.appendChild(compactBtn);
+
+        const resetBtn = document.createElement("button");
+        resetBtn.type = "button";
+        resetBtn.className = "mt-mode-reset";
+        resetBtn.textContent = "Resetar ajustes de performance";
+        resetBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.clearPerformanceOverrides();
+        });
+        menu.appendChild(resetBtn);
+
+        switcher.appendChild(trigger);
+        switcher.appendChild(menu);
+        this.container.appendChild(switcher);
+        this.syncPerformancePanelState();
+    }
+
+    private createPerformanceToggleRow(
+        label: string,
+        checked: boolean,
+        onChange: (checked: boolean) => void
+    ): HTMLElement {
+        const row = document.createElement("label");
+        row.className = "mt-mode-toggle-row";
+
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.className = "mt-mode-toggle";
+        input.checked = checked;
+        input.addEventListener("change", () => onChange(input.checked));
+
+        const text = document.createElement("span");
+        text.className = "mt-mode-toggle-label";
+        text.textContent = label;
+
+        row.appendChild(input);
+        row.appendChild(text);
+        return row;
+    }
+
+    private syncPerformancePanelState(): void {
+        const switcher = this.container.querySelector<HTMLElement>(".mt-mode-switcher");
+        if (!switcher) return;
+        switcher.classList.toggle("mt-mode-open", this.performancePanelOpen);
+    }
+
+    private setPerformancePanelOpen(open: boolean): void {
+        this.performancePanelOpen = open;
+        this.syncPerformancePanelState();
+    }
+
+    private capturePerformanceBaseConfig(): void {
+        if (Object.keys(this.performanceBaseConfig).length > 0) return;
+        this.performanceBaseConfig = {
+            spacingMode: this.config.spacingMode,
+            rowHeight: this.config.rowHeight,
+            headerHeight: this.config.headerHeight,
+            fontSize: this.config.fontSize,
+            showHeaderFilter: this.config.showHeaderFilter,
+            showQuickFilter: this.config.showQuickFilter,
+            showColumnIcons: this.config.showColumnIcons,
+            enablePagination: this.config.enablePagination,
+            borderless: this.config.borderless,
+            striped: this.config.striped,
+            enableConditionalFormatting: this.config.enableConditionalFormatting,
+            enableAnalyticsCellVisuals: this.config.enableAnalyticsCellVisuals
+        };
+    }
+
+    private getPerformancePresetOverrides(preset: Exclude<PerformancePreset, "custom">): PerformanceOverrides {
+        switch (preset) {
+            case "performance":
+                return {
+                    spacingMode: "compact",
+                    rowHeight: 30,
+                    headerHeight: 34,
+                    fontSize: 12,
+                    showHeaderFilter: false,
+                    showColumnIcons: false,
+                    enablePagination: false,
+                    borderless: true,
+                    striped: false,
+                    enableConditionalFormatting: false,
+                    enableAnalyticsCellVisuals: false
+                };
+            case "balanced":
+                return {
+                    spacingMode: "comfortable",
+                    rowHeight: 38,
+                    headerHeight: 42,
+                    fontSize: 13,
+                    showHeaderFilter: true,
+                    showColumnIcons: true,
+                    enablePagination: true,
+                    borderless: false,
+                    striped: true,
+                    enableConditionalFormatting: true,
+                    enableAnalyticsCellVisuals: true
+                };
+            case "presentation":
+                return {
+                    spacingMode: "spacious",
+                    rowHeight: 48,
+                    headerHeight: 54,
+                    fontSize: 14,
+                    showHeaderFilter: false,
+                    showColumnIcons: true,
+                    enablePagination: true,
+                    borderless: false,
+                    striped: true,
+                    enableConditionalFormatting: true,
+                    enableAnalyticsCellVisuals: true
+                };
+            case "default":
+            default:
+                return {};
+        }
+    }
+
+    private applyPerformancePreset(preset: Exclude<PerformancePreset, "custom">): void {
+        this.capturePerformanceBaseConfig();
+        this.performancePreset = preset;
+        this.performanceOverrides = this.getPerformancePresetOverrides(preset);
+        this.config = { ...this.config, ...this.performanceOverrides };
+        this.performancePanelOpen = true;
+        this.config.currentPage = 1;
+        this.applyFilters();
+        this.applySorting();
+        this.render();
+    }
+
+    private setPerformanceOverride<K extends PerformanceManagedKey>(key: K, value: IAdvancedTableConfig[K]): void {
+        this.setPerformanceOverrides({ [key]: value } as PerformanceOverrides, "custom");
+    }
+
+    private setPerformanceOverrides(overrides: PerformanceOverrides, preset: PerformancePreset = "custom"): void {
+        this.capturePerformanceBaseConfig();
+        this.performancePreset = preset;
+        this.performanceOverrides = { ...this.performanceOverrides, ...overrides };
+        this.config = { ...this.config, ...this.performanceOverrides };
+        this.performancePanelOpen = true;
+        this.config.currentPage = 1;
+        this.applyFilters();
+        this.applySorting();
+        this.render();
+    }
+
+    private disableAllFilters(): void {
+        this.capturePerformanceBaseConfig();
+        this.performancePreset = "custom";
+        this.performanceOverrides = {
+            ...this.performanceOverrides,
+            showHeaderFilter: false,
+            showQuickFilter: false
+        };
+        this.config.filters.clear();
+        this.quickFilterText = "";
+        this.config = {
+            ...this.config,
+            ...this.performanceOverrides,
+            showHeaderFilter: false,
+            showQuickFilter: false
+        };
+        this.config.currentPage = 1;
+        this.applyFilters();
+        this.applySorting();
+        this.render();
+    }
+
+    private clearPerformanceOverrides(): void {
+        const base = this.performanceBaseConfig;
+        this.performanceOverrides = {};
+        this.performancePreset = "default";
+        this.performanceBaseConfig = {};
+        if (Object.keys(base).length > 0) {
+            this.config = { ...this.config, ...base };
+        }
+        this.performancePanelOpen = true;
+        this.config.currentPage = 1;
+        this.applyFilters();
+        this.applySorting();
+        this.render();
+    }
+
+    private renderQuickActionsToolbar(): void {
+        if (!this.config.showQuickFilter) return;
+
+        const bar = document.createElement("div");
+        bar.className = "mt-quickbar";
+
+        const search = document.createElement("input");
+        search.type = "text";
+        search.className = "mt-quickbar-search";
+        search.placeholder = "Busca global (todas as colunas visíveis)";
+        search.value = this.quickFilterText;
+        search.addEventListener("input", () => {
+            this.setQuickFilter(search.value);
+            this.refreshBodyAndPagination();
+        });
+
+        const clearFiltersBtn = document.createElement("button");
+        clearFiltersBtn.type = "button";
+        clearFiltersBtn.className = "mt-btn-ghost";
+        clearFiltersBtn.textContent = "Limpar filtros";
+        clearFiltersBtn.addEventListener("click", () => {
+            this.clearAllFilters();
+            search.value = "";
+            this.refreshBodyAndPagination();
+        });
+
+        const clearSortBtn = document.createElement("button");
+        clearSortBtn.type = "button";
+        clearSortBtn.className = "mt-btn-ghost";
+        clearSortBtn.textContent = "Limpar ordenação";
+        clearSortBtn.addEventListener("click", () => {
+            this.clearSorting();
+            this.refreshBodyAndPagination();
+        });
+
+        bar.appendChild(search);
+        bar.appendChild(clearFiltersBtn);
+        bar.appendChild(clearSortBtn);
+        this.container.appendChild(bar);
+    }
+
+    private renderGroupToolbar(): void {
+        const toolbar = document.createElement("div");
+        toolbar.className = "mt-group-toolbar";
+
+        const title = document.createElement("span");
+        title.className = "mt-group-toolbar-title";
+        title.textContent = "Grupos";
+        toolbar.appendChild(title);
+
+        const expandBtn = document.createElement("button");
+        expandBtn.type = "button";
+        expandBtn.className = "mt-btn-ghost";
+        expandBtn.textContent = "Expandir tudo";
+        expandBtn.addEventListener("click", () => {
+            this.collapsedGroups.clear();
+            this.config.currentPage = 1;
+            this.render();
+        });
+
+        const collapseBtn = document.createElement("button");
+        collapseBtn.type = "button";
+        collapseBtn.className = "mt-btn-ghost";
+        collapseBtn.textContent = "Recolher tudo";
+        collapseBtn.addEventListener("click", () => {
+            const groupedRows = this.buildGroupedRows(this.rows);
+            this.collapsedGroups.clear();
+            groupedRows
+                .filter(r => r.rowType === "group" && !!r.groupKey)
+                .forEach(r => this.collapsedGroups.add(String(r.groupKey)));
+            this.config.currentPage = 1;
+            this.render();
+        });
+
+        toolbar.appendChild(expandBtn);
+        toolbar.appendChild(collapseBtn);
+        this.container.appendChild(toolbar);
     }
 
     private buildMatrixData(): {
@@ -1012,7 +1717,7 @@ export class AdvancedModernTable {
                         this.config.sortColumn === col.name && this.config.sortDirection === "asc"
                             ? "desc"
                             : "asc";
-                    this.setSorting(col.name, newDir);
+                    this.setSortingModel(col.name, newDir, !!e.shiftKey);
                     this.config.currentPage = 1;
                     this.render();
                 });
@@ -1079,7 +1784,7 @@ export class AdvancedModernTable {
                         this.config.sortColumn === col.name && this.config.sortDirection === "asc"
                             ? "desc"
                             : "asc";
-                    this.setSorting(col.name, newDir);
+                    this.setSortingModel(col.name, newDir, !!e.shiftKey);
                     this.config.currentPage = 1;
                     this.render();
                 });
@@ -1456,7 +2161,7 @@ export class AdvancedModernTable {
         thead.className = "mt-thead";
         thead.setAttribute("role", "rowgroup");
 
-        const visibleCols = this.columns.filter(c => c.visible);
+        const visibleCols = this.getRenderableColumns();
         const headerDepth = this.getComplexHeaderDepth(visibleCols);
 
         if (headerDepth > 1) {
@@ -1529,8 +2234,7 @@ export class AdvancedModernTable {
             tr.appendChild(th);
         }
 
-        this.columns.forEach(col => {
-            if (!col.visible) return;
+        this.getRenderableColumns().forEach(col => {
             tr.appendChild(this.createHeaderCell(col, autoColumnWidths));
         });
 
@@ -1590,12 +2294,20 @@ export class AdvancedModernTable {
         if (col.sortable) {
             const sortIconContainer = document.createElement("span");
             sortIconContainer.className = "mt-sort-icon";
-            if (this.config.sortColumn === col.name) {
+            const sortMeta = this.getSortMeta(col.name);
+            if (sortMeta) {
                 sortIconContainer.classList.add("mt-sort-active");
             }
             const svgHtml = this.getSortIconSVG(col.name);
             sortIconContainer.innerHTML = svgHtml;
             inner.appendChild(sortIconContainer);
+
+            if (sortMeta && this.sortModel.length > 1) {
+                const orderBadge = document.createElement("span");
+                orderBadge.className = "mt-sort-order";
+                orderBadge.textContent = String(sortMeta.priority);
+                inner.appendChild(orderBadge);
+            }
 
             th.style.cursor = "pointer";
             th.addEventListener("click", (e) => {
@@ -1607,7 +2319,7 @@ export class AdvancedModernTable {
                 const newDir: "asc" | "desc" =
                     this.config.sortColumn === col.name && this.config.sortDirection === "asc"
                         ? "desc" : "asc";
-                this.setSorting(col.name, newDir);
+                this.setSortingModel(col.name, newDir, !!e.shiftKey);
                 this.config.currentPage = 1;
                 this.render();
             });
@@ -1750,7 +2462,7 @@ export class AdvancedModernTable {
 
     // ─── Table Body ───────────────────────────────────────────────────────────
 
-    private renderTableBody(table: HTMLElement, autoColumnWidths: Map<string, number>): void {
+    private renderTableBody(table: HTMLElement, autoColumnWidths: Map<string, number>, wrapper: HTMLElement): void {
         const tbody = document.createElement("div");
         tbody.className = "mt-tbody";
         tbody.setAttribute("role", "rowgroup");
@@ -1772,9 +2484,54 @@ export class AdvancedModernTable {
             return;
         }
 
-        pagedRows.forEach((row, visIndex) => {
-            tbody.appendChild(this.createDataRow(row, visIndex, autoColumnWidths));
-        });
+        const shouldVirtualize = !this.config.enablePagination && pagedRows.length > 150;
+        if (!shouldVirtualize) {
+            pagedRows.forEach((row, visIndex) => {
+                tbody.appendChild(this.createDataRow(row, visIndex, autoColumnWidths));
+            });
+            table.appendChild(tbody);
+            return;
+        }
+
+        const topSpacer = document.createElement("div");
+        topSpacer.className = "mt-tr-spacer";
+        topSpacer.setAttribute("aria-hidden", "true");
+
+        const rowsHost = document.createElement("div");
+        rowsHost.className = "mt-virtual-rows";
+
+        const bottomSpacer = document.createElement("div");
+        bottomSpacer.className = "mt-tr-spacer";
+        bottomSpacer.setAttribute("aria-hidden", "true");
+
+        const rowHeight = Math.max(24, this.config.rowHeight || 40);
+        const bufferRows = 10;
+
+        const renderWindow = () => {
+            const viewportHeight = Math.max(200, wrapper.clientHeight || this.config.tableHeightPx || 500);
+            const scrollTop = wrapper.scrollTop;
+            const start = Math.max(0, Math.floor(scrollTop / rowHeight) - bufferRows);
+            const visibleCount = Math.ceil(viewportHeight / rowHeight) + (bufferRows * 2);
+            const end = Math.min(pagedRows.length, start + visibleCount);
+
+            topSpacer.style.height = `${start * rowHeight}px`;
+            bottomSpacer.style.height = `${Math.max(0, (pagedRows.length - end) * rowHeight)}px`;
+
+            while (rowsHost.firstChild) {
+                rowsHost.removeChild(rowsHost.firstChild);
+            }
+
+            for (let i = start; i < end; i += 1) {
+                rowsHost.appendChild(this.createDataRow(pagedRows[i], i, autoColumnWidths));
+            }
+        };
+
+        wrapper.addEventListener("scroll", renderWindow, { passive: true });
+
+        tbody.appendChild(topSpacer);
+        tbody.appendChild(rowsHost);
+        tbody.appendChild(bottomSpacer);
+        renderWindow();
 
         table.appendChild(tbody);
     }
@@ -1891,8 +2648,7 @@ export class AdvancedModernTable {
         }
 
         // Data cells
-        this.columns.forEach(col => {
-            if (!col.visible) return;
+        this.getRenderableColumns().forEach(col => {
             const td = document.createElement("div");
             td.className = "mt-td";
             td.setAttribute("role", "cell");
@@ -1956,7 +2712,11 @@ export class AdvancedModernTable {
                 inner.appendChild(label);
                 td.appendChild(inner);
             } else {
-                if (useProgress && typeof value === "number") {
+                if (this.config.enableAnalyticsCellVisuals && this.isTimelineVisualColumn(col)) {
+                    this.appendSparklineCell(td, this.resolveSparklineData(value, row, col));
+                } else if (this.config.enableAnalyticsCellVisuals && this.isFinanceMetricVisualColumn(col)) {
+                    this.appendFinanceMetricCell(td, value, formatted);
+                } else if (useProgress && typeof value === "number") {
                     td.classList.add("mt-td-bar");
                     const pct = col.dataType === "percentage"
                         ? Math.max(0, Math.min(1, value > 1 ? value / 100 : value))
@@ -2177,6 +2937,23 @@ export class AdvancedModernTable {
         renameInput.type = "text";
         renameInput.placeholder = this.columnDisplayNameBase.get(col.name) ?? col.displayName;
         renameInput.value = this.columnDisplayNameOverrides.get(col.name) ?? col.displayName;
+
+        const pinLabel = document.createElement("label");
+        pinLabel.className = "mt-cond-color-label";
+        pinLabel.textContent = "Fixar coluna";
+        const pinSelect = document.createElement("select");
+        pinSelect.className = "mt-cond-select";
+        [
+            { value: "none", text: "Não fixar" },
+            { value: "left", text: "Fixar à esquerda" },
+            { value: "right", text: "Fixar à direita" }
+        ].forEach(opt => {
+            const o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.text;
+            pinSelect.appendChild(o);
+        });
+        pinSelect.value = col.pinned || "none";
 
         const alignLabel = document.createElement("label");
         alignLabel.className = "mt-cond-color-label";
@@ -2436,6 +3213,14 @@ export class AdvancedModernTable {
             } else {
                 this.columnIconOverrides.set(col.name, iconOverride);
             }
+
+            const pinValue = pinSelect.value === "none" ? null : (pinSelect.value as "left" | "right");
+            this.columnPinOverrides.set(col.name, pinValue);
+            this.columns = this.columns.map((c) => {
+                if (c.name !== col.name) return c;
+                return { ...c, pinned: pinValue };
+            });
+
             this.emitOnObjectStateChanged();
 
             this.closeColumnFormatPanel();
@@ -2460,6 +3245,8 @@ export class AdvancedModernTable {
 
         titleSection.appendChild(renameLabel);
         titleSection.appendChild(renameInput);
+        titleSection.appendChild(pinLabel);
+        titleSection.appendChild(pinSelect);
         titleSection.appendChild(alignLabel);
         titleSection.appendChild(alignGroup);
         titleSection.appendChild(styleLabel);
@@ -2697,6 +3484,11 @@ export class AdvancedModernTable {
         });
 
         this.columnIconOverrides.delete(columnName);
+        this.columnPinOverrides.delete(columnName);
+        this.columns = this.columns.map((c) => {
+            if (c.name !== columnName) return c;
+            return { ...c, pinned: null };
+        });
     }
 
     private setColumnFormattingForColumn(columnName: string, override: ColumnFormattingOverride): void {
@@ -2710,11 +3502,19 @@ export class AdvancedModernTable {
             el.style.flex = `0 0 ${stored}px`;
             el.style.width = `${stored}px`;
             el.style.minWidth = `${stored}px`;
+            el.style.maxWidth = `${stored}px`;
         } else if (autoColumnWidths?.has(col.name)) {
             const auto = autoColumnWidths.get(col.name)!;
             el.style.flex = `0 0 ${auto}px`;
             el.style.width = `${auto}px`;
             el.style.minWidth = `${auto}px`;
+            el.style.maxWidth = `${auto}px`;
+        } else if (this.autoColumnWidthsPx.has(col.name)) {
+            const auto = this.autoColumnWidthsPx.get(col.name)!;
+            el.style.flex = `0 0 ${auto}px`;
+            el.style.width = `${auto}px`;
+            el.style.minWidth = `${auto}px`;
+            el.style.maxWidth = `${auto}px`;
         } else {
             el.style.flex = `0 0 ${col.width}%`;
             el.style.width = `${col.width}%`;
@@ -2888,6 +3688,73 @@ export class AdvancedModernTable {
         title.className = "mt-filter-panel-title";
         title.textContent = col.displayName;
         panel.appendChild(title);
+
+        const advancedSection = document.createElement("div");
+        advancedSection.className = "mt-filter-values-section";
+
+        const advancedTitle = document.createElement("div");
+        advancedTitle.className = "mt-filter-panel-title";
+        advancedTitle.textContent = "Filtro avançado";
+        advancedSection.appendChild(advancedTitle);
+
+        const opSelect = document.createElement("select");
+        opSelect.className = "mt-cond-select";
+        [
+            { value: "contains", text: "Contém" },
+            { value: "equals", text: "Igual a" },
+            { value: "notEquals", text: "Diferente de" },
+            { value: "startsWith", text: "Começa com" },
+            { value: "endsWith", text: "Termina com" }
+        ].forEach(opt => {
+            const o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.text;
+            opSelect.appendChild(o);
+        });
+
+        const opInput = document.createElement("input");
+        opInput.type = "text";
+        opInput.className = "mt-filter-search";
+        opInput.placeholder = "Valor para comparação";
+
+        if (this.isOperatorFilter(currentFilter)) {
+            opSelect.value = currentFilter.op;
+            opInput.value = currentFilter.value || "";
+        }
+
+        const advancedActions = document.createElement("div");
+        advancedActions.className = "mt-filter-actions";
+
+        const clearAdvancedBtn = document.createElement("button");
+        clearAdvancedBtn.type = "button";
+        clearAdvancedBtn.className = "mt-btn-ghost";
+        clearAdvancedBtn.textContent = "Limpar avançado";
+        clearAdvancedBtn.addEventListener("click", () => {
+            opInput.value = "";
+            if (this.isOperatorFilter(this.config.filters.get(col.name))) {
+                this.setFilter(col.name, null);
+                this.refreshBodyAndPagination();
+            }
+        });
+
+        const applyAdvancedBtn = document.createElement("button");
+        applyAdvancedBtn.type = "button";
+        applyAdvancedBtn.className = "mt-btn-primary";
+        applyAdvancedBtn.textContent = "Aplicar avançado";
+        applyAdvancedBtn.addEventListener("click", () => {
+            this.setFilter(col.name, {
+                op: opSelect.value,
+                value: opInput.value
+            });
+            this.refreshBodyAndPagination();
+        });
+
+        advancedActions.appendChild(clearAdvancedBtn);
+        advancedActions.appendChild(applyAdvancedBtn);
+        advancedSection.appendChild(opSelect);
+        advancedSection.appendChild(opInput);
+        advancedSection.appendChild(advancedActions);
+        panel.appendChild(advancedSection);
 
         let rangeFocusTarget: HTMLInputElement | null = null;
 
@@ -3526,13 +4393,37 @@ export class AdvancedModernTable {
     }
 
     private getSortIconText(colName: string): string {
-        if (this.config.sortColumn !== colName) return "↕";
-        return this.config.sortDirection === "asc" ? "↑" : "↓";
+        const meta = this.getSortMeta(colName);
+        if (!meta) return "↕";
+        return meta.direction === "asc" ? "↑" : "↓";
+    }
+
+    private getSortMeta(colName: string): { direction: "asc" | "desc"; priority: number } | null {
+        if (this.sortModel.length > 0) {
+            const idx = this.sortModel.findIndex(s => s.columnName === colName);
+            if (idx >= 0) {
+                return {
+                    direction: this.sortModel[idx].direction,
+                    priority: idx + 1
+                };
+            }
+            return null;
+        }
+
+        if (this.config.sortColumn === colName) {
+            return {
+                direction: this.config.sortDirection,
+                priority: 1
+            };
+        }
+
+        return null;
     }
 
     private getSortIconSVG(colName: string): string {
-        const isActive = this.config.sortColumn === colName;
-        const isAsc = this.config.sortDirection === "asc";
+        const sortMeta = this.getSortMeta(colName);
+        const isActive = !!sortMeta;
+        const isAsc = sortMeta?.direction === "asc";
 
         if (!isActive) {
             return '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M7 14l5-5 5 5H7z"/><path d="M7 10l5 5 5-5H7z"/></svg>';
@@ -3768,7 +4659,13 @@ export class AdvancedModernTable {
 
     private refreshBodyAndPagination(): void {
         const table = this.container.querySelector<HTMLElement>(".mt-table");
+        const wrapper = this.container.querySelector<HTMLElement>(".mt-table-wrapper");
         if (!table) {
+            this.render();
+            return;
+        }
+
+        if (!wrapper) {
             this.render();
             return;
         }
@@ -3776,8 +4673,8 @@ export class AdvancedModernTable {
         const existingTbody = table.querySelector<HTMLElement>(".mt-tbody");
         if (existingTbody) existingTbody.remove();
 
-        const autoColumnWidths = new Map<string, number>();
-        this.renderTableBody(table, autoColumnWidths);
+        this.recomputeAutoColumnWidths();
+        this.renderTableBody(table, this.autoColumnWidthsPx, wrapper);
 
         const existingPag = this.container.querySelector<HTMLElement>(".mt-pagination");
         if (existingPag) existingPag.remove();
@@ -3787,8 +4684,7 @@ export class AdvancedModernTable {
     }
 
     private refreshHeaderIndicators(): void {
-        this.columns.forEach(col => {
-            if (!col.visible) return;
+        this.getRenderableColumns().forEach(col => {
 
             const th = this.container.querySelector<HTMLElement>(`.mt-th[data-col="${col.name}"]`);
             if (!th) return;
@@ -3796,7 +4692,7 @@ export class AdvancedModernTable {
             const sortIcon = th.querySelector<HTMLElement>(".mt-sort-icon");
             if (sortIcon) {
                 sortIcon.innerHTML = this.getSortIconSVG(col.name);
-                sortIcon.classList.toggle("mt-sort-active", this.config.sortColumn === col.name);
+                sortIcon.classList.toggle("mt-sort-active", !!this.getSortMeta(col.name));
             }
 
             const filterBtn = th.querySelector<HTMLButtonElement>(".mt-filter-btn");

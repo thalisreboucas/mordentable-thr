@@ -177,6 +177,12 @@ class TableFeaturesCard extends FormattingSettingsCard {
         value: false
     });
 
+    enableAnalyticsCellVisuals = new formattingSettings.ToggleSwitch({
+        name: "enableAnalyticsCellVisuals",
+        displayName: "Visuais analíticos nas células",
+        value: false
+    });
+
     name: string = "tableFeatures";
     displayName: string = "⚙️ Recursos & Interação";
     slices: Array<FormattingSettingsSlice> = [
@@ -186,7 +192,8 @@ class TableFeaturesCard extends FormattingSettingsCard {
         this.groupByColumnName,
         this.showHeaderFilter,
         this.showRowNumbers,
-        this.enableRowSelection
+        this.enableRowSelection,
+        this.enableAnalyticsCellVisuals
     ];
 }
 
