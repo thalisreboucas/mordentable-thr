@@ -21,8 +21,10 @@
     "powerbi-visuals-utils-formattingmodel": "6.0.4"
   },
   "devDependencies": {
+    "@typescript-eslint/parser": "^8.59.3",
     "eslint": "^8.57.0",
     "eslint-plugin-powerbi-visuals": "^1.0.0",
+    "ts-loader": "^9.5.7",
     "typescript": "5.5.4"
   }
 }

@@ -115,6 +115,18 @@ class ColumnsIconsCard extends FormattingSettingsCard {
         value: ""
     });
 
+    iconColor = new formattingSettings.ColorPicker({
+        name: "iconColor",
+        displayName: "Cor dos ícones",
+        value: { value: "" }
+    });
+
+    iconBackgroundColor = new formattingSettings.ColorPicker({
+        name: "iconBackgroundColor",
+        displayName: "Fundo dos ícones",
+        value: { value: "" }
+    });
+
     enableColumnResize = new formattingSettings.ToggleSwitch({
         name: "enableColumnResize",
         displayName: "Redimensionar colunas (arrastar)",
@@ -126,6 +138,8 @@ class ColumnsIconsCard extends FormattingSettingsCard {
     slices: Array<FormattingSettingsSlice> = [
         this.showColumnIcons,
         this.iconPreset,
+        this.iconColor,
+        this.iconBackgroundColor,
         this.columnIconMap,
         this.enableColumnResize
     ];
@@ -165,6 +179,12 @@ class TableFeaturesCard extends FormattingSettingsCard {
         value: true
     });
 
+    showQuickFilter = new formattingSettings.ToggleSwitch({
+        name: "showQuickFilter",
+        displayName: "Busca global acima da tabela",
+        value: true
+    });
+
     showRowNumbers = new formattingSettings.ToggleSwitch({
         name: "showRowNumbers",
         displayName: "Numeração de linhas",
@@ -191,6 +211,7 @@ class TableFeaturesCard extends FormattingSettingsCard {
         this.enableGrouping,
         this.groupByColumnName,
         this.showHeaderFilter,
+        this.showQuickFilter,
         this.showRowNumbers,
         this.enableRowSelection,
         this.enableAnalyticsCellVisuals

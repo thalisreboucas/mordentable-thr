@@ -76,6 +76,7 @@ export interface IAdvancedRow {
     isExpanded?: boolean;
     groupKey?: string;
     groupColumnIndex?: number;
+    identity?: any;
 }
 
 export interface IConditionalFormat {
@@ -179,6 +180,8 @@ export interface IAdvancedTableConfig {
     iconPreset: "minimal" | "emoji" | "technical";
     customColumnIcons: Record<string, string>;
     enableColumnResize: boolean;
+    iconColor: string;
+    iconBackgroundColor: string;
     showRowNumbers: boolean;
     enableRowSelection: boolean;
     enableAnalyticsCellVisuals: boolean;
@@ -219,19 +222,29 @@ export class AdvancedModernTable {
     private sortModel: SortDescriptor[] = [];
     private quickFilterText: string = "";
     private performancePanelOpen: boolean = false;
+    private toolbarCollapsed: boolean = false;
     private performancePreset: PerformancePreset = "default";
     private performanceOverrides: PerformanceOverrides = {};
     private performanceBaseConfig: PerformanceOverrides = {};
     private onObjectStateChanged?: (state: string) => void;
+    private host?: any;
+    private selectionManager?: any;
 
     constructor(
         container: HTMLElement,
         config: Partial<IAdvancedTableConfig> = {},
-        onObjectStateChanged?: (state: string) => void
+        onObjectStateChanged?: (state: string) => void,
+        host?: any
     ) {
         this.container = container;
         this.config = this.buildDefaultConfig(config);
         this.onObjectStateChanged = onObjectStateChanged;
+        this.host = host;
+        try {
+            this.selectionManager = host?.createSelectionManager ? host.createSelectionManager() : undefined;
+        } catch {
+            this.selectionManager = undefined;
+        }
         this.setupOutsideClickHandler();
     }
 
@@ -281,6 +294,8 @@ export class AdvancedModernTable {
             iconPreset: "minimal",
             customColumnIcons: {},
             enableColumnResize: true,
+            iconColor: "",
+            iconBackgroundColor: "",
             showRowNumbers: false,
             enableRowSelection: false,
             enableAnalyticsCellVisuals: false,
@@ -432,8 +447,41 @@ export class AdvancedModernTable {
         return this.config.showColumnIcons;
     }
 
+    private rowSelectionIds: Map<string | number, any> = new Map();
+
     public setData(rows: IAdvancedRow[]): void {
         this.allRows = rows.filter(r => !r.isCalculated);
+
+        // Build SelectionId map for rows when host supports builder and row identity is present
+        this.rowSelectionIds.clear();
+        try {
+            const builderFactory = this.host?.createSelectionIdBuilder?.bind(this.host);
+            if (builderFactory) {
+                this.allRows.forEach((r, idx) => {
+                    try {
+                        const builder = this.host.createSelectionIdBuilder();
+                        let selId: any = undefined;
+                        if (r.identity) {
+                            if (typeof builder.withSelector === "function") {
+                                selId = builder.withSelector(r.identity).createSelectionId();
+                            } else if (typeof builder.withCategory === "function") {
+                                selId = builder.withCategory(r.identity, idx).createSelectionId();
+                            } else {
+                                selId = builder.createSelectionId();
+                            }
+                        } else {
+                            selId = builder.createSelectionId();
+                        }
+                        this.rowSelectionIds.set(r.id, selId);
+                    } catch {
+                        // ignore selection id creation errors
+                    }
+                });
+            }
+        } catch {
+            // ignore
+        }
+
         this.applyFilters();
         this.applySorting();
     }
@@ -1239,7 +1287,11 @@ export class AdvancedModernTable {
         trigger.className = "mt-mode-trigger";
         trigger.title = "Performance: editar tabela inteira";
         trigger.setAttribute("aria-label", "Performance: editar tabela inteira");
-        trigger.innerHTML = '<span class="mt-mode-trigger-icon" aria-hidden="true">⚡</span>';
+        const triggerIcon = document.createElement("span");
+        triggerIcon.className = "mt-mode-trigger-icon";
+        triggerIcon.setAttribute("aria-hidden", "true");
+        triggerIcon.textContent = "⚡";
+        trigger.appendChild(triggerIcon);
         trigger.addEventListener("click", (e) => {
             e.stopPropagation();
             this.setPerformancePanelOpen(!this.performancePanelOpen);
@@ -1517,43 +1569,102 @@ export class AdvancedModernTable {
     }
 
     private renderQuickActionsToolbar(): void {
-        if (!this.config.showQuickFilter) return;
-
         const bar = document.createElement("div");
         bar.className = "mt-quickbar";
 
-        const search = document.createElement("input");
-        search.type = "text";
-        search.className = "mt-quickbar-search";
-        search.placeholder = "Busca global (todas as colunas visíveis)";
-        search.value = this.quickFilterText;
-        search.addEventListener("input", () => {
-            this.setQuickFilter(search.value);
-            this.refreshBodyAndPagination();
+        // Botão minimizar/expandir — sempre visível
+        const collapseBtn = document.createElement("button");
+        collapseBtn.type = "button";
+        collapseBtn.className = "mt-quickbar-collapse";
+        collapseBtn.title = this.toolbarCollapsed ? "Expandir barra de atalhos" : "Minimizar barra de atalhos";
+        collapseBtn.textContent = this.toolbarCollapsed ? "›" : "‹";
+        bar.appendChild(collapseBtn);
+
+        // Conteúdo colapsável
+        const content = document.createElement("div");
+        content.className = "mt-quickbar-content";
+        if (this.toolbarCollapsed) content.style.display = "none";
+
+        if (this.config.showQuickFilter) {
+            const search = document.createElement("input");
+            search.type = "text";
+            search.className = "mt-quickbar-search";
+            search.placeholder = "Busca global…";
+            search.value = this.quickFilterText;
+            search.addEventListener("input", () => {
+                this.setQuickFilter(search.value);
+                this.refreshBodyAndPagination();
+            });
+            content.appendChild(search);
+
+            const clearFiltersBtn = document.createElement("button");
+            clearFiltersBtn.type = "button";
+            clearFiltersBtn.className = "mt-btn-ghost";
+            clearFiltersBtn.textContent = "Limpar filtros";
+            clearFiltersBtn.addEventListener("click", () => {
+                this.clearAllFilters();
+                search.value = "";
+                this.refreshBodyAndPagination();
+            });
+            content.appendChild(clearFiltersBtn);
+
+            const clearSortBtn = document.createElement("button");
+            clearSortBtn.type = "button";
+            clearSortBtn.className = "mt-btn-ghost";
+            clearSortBtn.textContent = "Limpar ordem";
+            clearSortBtn.addEventListener("click", () => {
+                this.clearSorting();
+                this.refreshBodyAndPagination();
+            });
+            content.appendChild(clearSortBtn);
+
+            const sep = document.createElement("div");
+            sep.className = "mt-quickbar-sep";
+            content.appendChild(sep);
+        }
+
+        // Atalhos de formatação rápida
+        const makeToggle = (label: string, title: string, active: boolean, onClick: () => void) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "mt-quickbar-toggle" + (active ? " mt-quickbar-toggle-active" : "");
+            btn.title = title;
+            btn.textContent = label;
+            btn.addEventListener("click", onClick);
+            return btn;
+        };
+
+        content.appendChild(makeToggle("⌕", "Busca global", this.config.showQuickFilter, () => {
+            this.setPerformanceOverride("showQuickFilter", !this.config.showQuickFilter);
+        }));
+        content.appendChild(makeToggle("⊟", "Filtros nas colunas", this.config.showHeaderFilter, () => {
+            this.setPerformanceOverride("showHeaderFilter", !this.config.showHeaderFilter);
+        }));
+
+        const sep2 = document.createElement("div");
+        sep2.className = "mt-quickbar-sep";
+        content.appendChild(sep2);
+
+        content.appendChild(makeToggle("◈", "Ícones nas colunas", this.config.showColumnIcons, () => {
+            this.setPerformanceOverride("showColumnIcons", !this.config.showColumnIcons);
+        }));
+        content.appendChild(makeToggle("▤", "Linhas alternadas", this.config.striped, () => {
+            this.setPerformanceOverride("striped", !this.config.striped);
+        }));
+        content.appendChild(makeToggle("⊜", "Compacto", this.config.spacingMode === "compact", () => {
+            this.setPerformanceOverride("spacingMode",
+                this.config.spacingMode === "compact" ? "comfortable" : "compact");
+        }));
+
+        bar.appendChild(content);
+
+        collapseBtn.addEventListener("click", () => {
+            this.toolbarCollapsed = !this.toolbarCollapsed;
+            content.style.display = this.toolbarCollapsed ? "none" : "";
+            collapseBtn.textContent = this.toolbarCollapsed ? "›" : "‹";
+            collapseBtn.title = this.toolbarCollapsed ? "Expandir barra de atalhos" : "Minimizar barra de atalhos";
         });
 
-        const clearFiltersBtn = document.createElement("button");
-        clearFiltersBtn.type = "button";
-        clearFiltersBtn.className = "mt-btn-ghost";
-        clearFiltersBtn.textContent = "Limpar filtros";
-        clearFiltersBtn.addEventListener("click", () => {
-            this.clearAllFilters();
-            search.value = "";
-            this.refreshBodyAndPagination();
-        });
-
-        const clearSortBtn = document.createElement("button");
-        clearSortBtn.type = "button";
-        clearSortBtn.className = "mt-btn-ghost";
-        clearSortBtn.textContent = "Limpar ordenação";
-        clearSortBtn.addEventListener("click", () => {
-            this.clearSorting();
-            this.refreshBodyAndPagination();
-        });
-
-        bar.appendChild(search);
-        bar.appendChild(clearFiltersBtn);
-        bar.appendChild(clearSortBtn);
         this.container.appendChild(bar);
     }
 
@@ -1707,7 +1818,7 @@ export class AdvancedModernTable {
                 const sortBtn = document.createElement("button");
                 sortBtn.className = "mt-filter-btn mt-matrix-sort-btn";
                 sortBtn.setAttribute("aria-label", `Ordenar ${col.displayName}`);
-                sortBtn.innerHTML = this.getSortIconSVG(col.name);
+                this.setSvgContent(sortBtn, this.getSortIconSVG(col.name));
                 if (this.config.sortColumn === col.name) {
                     sortBtn.classList.add("mt-matrix-sort-active");
                 }
@@ -1730,7 +1841,7 @@ export class AdvancedModernTable {
                 filterBtn.setAttribute("aria-label", `Filtrar ${col.displayName}`);
                 const hasFilter = this.config.filters.has(col.name);
                 if (hasFilter) filterBtn.classList.add("mt-filter-active");
-                filterBtn.innerHTML = this.getFilterIconSVG(hasFilter);
+                this.setSvgContent(filterBtn, this.getFilterIconSVG(hasFilter));
                 filterBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
                     if (this.activePanelColName === col.name) {
@@ -1774,7 +1885,7 @@ export class AdvancedModernTable {
                 const sortBtn = document.createElement("button");
                 sortBtn.className = "mt-filter-btn mt-matrix-sort-btn";
                 sortBtn.setAttribute("aria-label", `Ordenar ${col.displayName}`);
-                sortBtn.innerHTML = this.getSortIconSVG(col.name);
+                this.setSvgContent(sortBtn, this.getSortIconSVG(col.name));
                 if (this.config.sortColumn === col.name) {
                     sortBtn.classList.add("mt-matrix-sort-active");
                 }
@@ -1797,7 +1908,7 @@ export class AdvancedModernTable {
                 filterBtn.setAttribute("aria-label", `Filtrar ${col.displayName}`);
                 const hasFilter = this.config.filters.has(col.name);
                 if (hasFilter) filterBtn.classList.add("mt-filter-active");
-                filterBtn.innerHTML = this.getFilterIconSVG(hasFilter);
+                this.setSvgContent(filterBtn, this.getFilterIconSVG(hasFilter));
                 filterBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
                     if (this.activePanelColName === col.name) {
@@ -2071,6 +2182,12 @@ export class AdvancedModernTable {
         s.setProperty("--mt-summary-text-override", this.config.summaryRowTextColor);
         s.setProperty("--mt-subtotal-bg-override", this.config.subtotalRowBackgroundColor);
         s.setProperty("--mt-subtotal-text-override", this.config.subtotalRowTextColor);
+        if (this.config.iconColor) {
+            s.setProperty("--mt-icon-color", this.config.iconColor);
+        }
+        if (this.config.iconBackgroundColor) {
+            s.setProperty("--mt-icon-bg", this.config.iconBackgroundColor);
+        }
     }
 
     private applyTableDimensions(wrapper: HTMLElement): void {
@@ -2262,7 +2379,7 @@ export class AdvancedModernTable {
             iconContainer.style.cursor = "pointer";
             const iconOverride = this.columnIconOverrides.get(col.name);
             const svgHtml = iconOverride?.svg || this.getColumnIconSVG(col);
-            iconContainer.innerHTML = svgHtml;
+            this.setSvgContent(iconContainer, svgHtml);
             if (iconOverride?.backgroundColor) iconContainer.style.backgroundColor = iconOverride.backgroundColor;
             if (iconOverride?.color) iconContainer.style.color = iconOverride.color;
             if (iconOverride?.size) {
@@ -2299,7 +2416,7 @@ export class AdvancedModernTable {
                 sortIconContainer.classList.add("mt-sort-active");
             }
             const svgHtml = this.getSortIconSVG(col.name);
-            sortIconContainer.innerHTML = svgHtml;
+            this.setSvgContent(sortIconContainer, svgHtml);
             inner.appendChild(sortIconContainer);
 
             if (sortMeta && this.sortModel.length > 1) {
@@ -2333,7 +2450,7 @@ export class AdvancedModernTable {
             const hasFilter = this.config.filters.has(col.name);
             if (hasFilter) filterBtn.classList.add("mt-filter-active");
             const svgHtml = this.getFilterIconSVG(hasFilter);
-            filterBtn.innerHTML = svgHtml;
+            this.setSvgContent(filterBtn, svgHtml);
             filterBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
                 if (this.activePanelColName === col.name) {
@@ -2371,6 +2488,12 @@ export class AdvancedModernTable {
             handle.addEventListener("mousedown", (e) => this.startColumnResize(e, col));
             th.appendChild(handle);
         }
+
+        th.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.openHeaderContextMenu(col, e.clientX, e.clientY);
+        });
 
         return th;
     }
@@ -2603,13 +2726,19 @@ export class AdvancedModernTable {
 
         // Row selection click
         if (this.config.enableRowSelection && row.rowType !== "group") {
-            tr.addEventListener("click", () => {
+            tr.addEventListener("click", (e: MouseEvent) => {
+                const multi = e.ctrlKey || e.shiftKey || (e as any).metaKey;
+                const selId = this.rowSelectionIds.get(row.id);
                 if (this.selectedRows.has(row.id)) {
                     this.selectedRows.delete(row.id);
+                    tr.classList.toggle("mt-tr-selected", false);
+                    try { if (this.selectionManager && selId) this.selectionManager.clear(); } catch {}
                 } else {
+                    if (!multi) this.selectedRows.clear();
                     this.selectedRows.add(row.id);
+                    tr.classList.toggle("mt-tr-selected", true);
+                    try { if (this.selectionManager && selId) this.selectionManager.select(selId, multi); } catch {}
                 }
-                tr.classList.toggle("mt-tr-selected", this.selectedRows.has(row.id));
             });
             tr.style.cursor = "pointer";
         }
@@ -2636,10 +2765,14 @@ export class AdvancedModernTable {
                 cb.checked = this.selectedRows.has(row.id);
                 cb.addEventListener("change", (e) => {
                     e.stopPropagation();
-                    if ((e.target as HTMLInputElement).checked) {
+                    const checked = (e.target as HTMLInputElement).checked;
+                    const selId = this.rowSelectionIds.get(row.id);
+                    if (checked) {
                         this.selectedRows.add(row.id);
+                        try { if (this.selectionManager && selId) this.selectionManager.select(selId, true); } catch {}
                     } else {
                         this.selectedRows.delete(row.id);
+                        try { if (this.selectionManager) this.selectionManager.clear(); } catch {}
                     }
                 });
                 td.appendChild(cb);
@@ -2758,7 +2891,7 @@ export class AdvancedModernTable {
                         if (icon) {
                             const iconSpan = document.createElement("span");
                             iconSpan.className = "mt-cond-badge-icon";
-                            iconSpan.innerHTML = icon;
+                            this.setSvgContent(iconSpan, icon);
                             badge.appendChild(iconSpan);
                         }
                     }
@@ -2790,102 +2923,162 @@ export class AdvancedModernTable {
         const panel = document.createElement("div");
         panel.className = "mt-colfmt-panel";
 
-        const title = document.createElement("div");
-        title.className = "mt-colfmt-panel-title";
-        title.textContent = `On-object: ${col.displayName}`;
-        panel.appendChild(title);
+        const panelHeader = document.createElement("div");
+        panelHeader.className = "mt-colfmt-panel-header";
 
-        const hint = document.createElement("div");
-        hint.className = "mt-colfmt-panel-hint";
-        hint.textContent = "Ajustes diretos na tabela sem depender da aba do pincel.";
-        panel.appendChild(hint);
+        const panelHeaderLeft = document.createElement("div");
+        panelHeaderLeft.className = "mt-colfmt-panel-header-left";
 
-        // Helper: campo de cor com HEX + seta + botão fx + matriz de cores
+        const panelTypeIcon = document.createElement("span");
+        panelTypeIcon.className = "mt-colfmt-panel-type-icon";
+        const typeIconMap: Record<string, string> = {
+            number: "#", currency: "$", percentage: "%", date: "📅", boolean: "◉"
+        };
+        panelTypeIcon.textContent = typeIconMap[col.dataType] || "T";
+
+        const panelColName = document.createElement("span");
+        panelColName.className = "mt-colfmt-panel-col-name";
+        panelColName.textContent = col.displayName;
+
+        const closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.className = "mt-colfmt-panel-close";
+        closeBtn.setAttribute("aria-label", "Fechar painel");
+        closeBtn.textContent = "✕";
+        closeBtn.addEventListener("click", () => this.closeColumnFormatPanel());
+
+        panelHeaderLeft.appendChild(panelTypeIcon);
+        panelHeaderLeft.appendChild(panelColName);
+        panelHeader.appendChild(panelHeaderLeft);
+        panelHeader.appendChild(closeBtn);
+        panel.appendChild(panelHeader);
+
+        // Helper: campo de cor com swatch preview + HEX + paleta
         const makeColorField = (initial: string) => {
+            const safeColor = /^#[0-9a-fA-F]{6}$/.test(initial) ? initial : "#000000";
             const container = document.createElement("div");
             container.className = "mt-color-field";
+
+            const swatch = document.createElement("button");
+            swatch.type = "button";
+            swatch.className = "mt-color-swatch-preview";
+            swatch.style.backgroundColor = safeColor;
+            swatch.title = "Clique para abrir o seletor de cor";
+
+            const hiddenPicker = document.createElement("input");
+            hiddenPicker.type = "color";
+            hiddenPicker.style.position = "absolute";
+            hiddenPicker.style.opacity = "0";
+            hiddenPicker.style.pointerEvents = "none";
+            hiddenPicker.style.width = "0";
+            hiddenPicker.style.height = "0";
+            hiddenPicker.value = safeColor;
 
             const hexInput = document.createElement("input");
             hexInput.type = "text";
             hexInput.className = "mt-color-hex";
             hexInput.placeholder = "#000000";
-            hexInput.value = initial || "#000000";
+            hexInput.value = safeColor;
 
-            const arrowBtn = document.createElement("button");
-            arrowBtn.type = "button";
-            arrowBtn.className = "mt-color-arrow";
-            arrowBtn.textContent = "▾";
-
-            const fxBtn = document.createElement("button");
-            fxBtn.type = "button";
-            fxBtn.className = "mt-color-fx";
-            fxBtn.textContent = "fx";
+            const paletteBtn = document.createElement("button");
+            paletteBtn.type = "button";
+            paletteBtn.className = "mt-color-palette-btn";
+            paletteBtn.setAttribute("aria-label", "Paleta de cores");
+            paletteBtn.textContent = "⊞";
 
             const matrix = document.createElement("div");
             matrix.className = "mt-color-matrix";
-            const palette = [
+            const paletteColors = [
                 "#000000", "#111827", "#374151", "#6b7280", "#9ca3af",
                 "#ffffff", "#f9fafb", "#f3f4f6", "#e5e7eb", "#d1d5db",
                 "#f97316", "#ea580c", "#dc2626", "#ef4444", "#facc15",
                 "#22c55e", "#16a34a", "#3b82f6", "#2563eb", "#4f46e5"
             ];
-            palette.forEach(color => {
+
+            const syncSwatch = (val: string) => {
+                if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+                    swatch.style.backgroundColor = val;
+                    hiddenPicker.value = val;
+                }
+            };
+
+            paletteColors.forEach(color => {
                 const sw = document.createElement("button");
                 sw.type = "button";
                 sw.className = "mt-color-swatch";
                 sw.style.backgroundColor = color;
+                sw.title = color;
                 sw.addEventListener("click", () => {
                     hexInput.value = color;
+                    syncSwatch(color);
                     matrix.style.display = "none";
                 });
                 matrix.appendChild(sw);
             });
 
-            const hiddenPicker = document.createElement("input");
-            hiddenPicker.type = "color";
-            hiddenPicker.style.display = "none";
-            hiddenPicker.value = initial || "#000000";
+            hexInput.addEventListener("input", () => syncSwatch(hexInput.value));
             hiddenPicker.addEventListener("input", () => {
                 hexInput.value = hiddenPicker.value;
+                syncSwatch(hiddenPicker.value);
             });
-
-            arrowBtn.addEventListener("click", () => {
+            swatch.addEventListener("click", () => hiddenPicker.click());
+            paletteBtn.addEventListener("click", () => {
                 matrix.style.display = matrix.style.display === "flex" ? "none" : "flex";
             });
 
-            fxBtn.addEventListener("click", () => {
-                hiddenPicker.click();
-            });
-
-            container.appendChild(hexInput);
-            container.appendChild(arrowBtn);
-            container.appendChild(fxBtn);
+            container.appendChild(swatch);
             container.appendChild(hiddenPicker);
+            container.appendChild(hexInput);
+            container.appendChild(paletteBtn);
 
             return { container, hexInput, matrix };
         };
 
-        // Blocos principais do painel
-        const iconSection = document.createElement("div");
-        iconSection.className = "mt-colfmt-section";
-        const iconSectionTitle = document.createElement("div");
-        iconSectionTitle.className = "mt-colfmt-section-title";
-        iconSectionTitle.textContent = "Edição de ícone";
-        iconSection.appendChild(iconSectionTitle);
+        // Helper: seção acordeão com ícone, título e conteúdo colapsável
+        const makeSection = (icon: string, title: string, startOpen = true) => {
+            const section = document.createElement("div");
+            section.className = "mt-colfmt-accordion";
 
-        const titleSection = document.createElement("div");
-        titleSection.className = "mt-colfmt-section";
-        const titleSectionTitle = document.createElement("div");
-        titleSectionTitle.className = "mt-colfmt-section-title";
-        titleSectionTitle.textContent = "Edição de título";
-        titleSection.appendChild(titleSectionTitle);
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "mt-colfmt-accordion-toggle";
+            if (startOpen) toggle.classList.add("mt-colfmt-accordion-open");
 
-        const valuesSection = document.createElement("div");
-        valuesSection.className = "mt-colfmt-section";
-        const valuesSectionTitle = document.createElement("div");
-        valuesSectionTitle.className = "mt-colfmt-section-title";
-        valuesSectionTitle.textContent = "Edição de valores";
-        valuesSection.appendChild(valuesSectionTitle);
+            const iconEl = document.createElement("span");
+            iconEl.className = "mt-colfmt-accordion-icon";
+            iconEl.textContent = icon;
+
+            const titleEl = document.createElement("span");
+            titleEl.className = "mt-colfmt-accordion-title";
+            titleEl.textContent = title;
+
+            const chevron = document.createElement("span");
+            chevron.className = "mt-colfmt-accordion-chevron";
+            chevron.textContent = "›";
+
+            toggle.appendChild(iconEl);
+            toggle.appendChild(titleEl);
+            toggle.appendChild(chevron);
+
+            const content = document.createElement("div");
+            content.className = "mt-colfmt-accordion-content";
+            if (!startOpen) content.style.display = "none";
+
+            toggle.addEventListener("click", () => {
+                const isOpen = toggle.classList.contains("mt-colfmt-accordion-open");
+                toggle.classList.toggle("mt-colfmt-accordion-open", !isOpen);
+                content.style.display = isOpen ? "none" : "";
+            });
+
+            section.appendChild(toggle);
+            section.appendChild(content);
+            return { section, content };
+        };
+
+        // Blocos principais do painel como acordeões
+        const { section: iconSection, content: iconSectionContent } = makeSection("◉", "Ícone", false);
+        const { section: titleSection, content: titleSectionContent } = makeSection("T", "Cabeçalho", true);
+        const { section: valuesSection, content: valuesSectionContent } = makeSection("≡", "Valores", true);
 
         const iconsWrap = document.createElement("label");
         iconsWrap.className = "mt-cond-checkbox";
@@ -3231,38 +3424,38 @@ export class AdvancedModernTable {
         actions.appendChild(applyBtn);
 
         // Monta seções com blocos visuais
-        iconSection.appendChild(iconsWrap);
-        iconSection.appendChild(iconColorLabel);
-        iconSection.appendChild(iconColorField.container);
-        iconSection.appendChild(iconColorField.matrix);
-        iconSection.appendChild(iconBgLabel);
-        iconSection.appendChild(iconBgField.container);
-        iconSection.appendChild(iconBgField.matrix);
-        iconSection.appendChild(iconSizeLabel);
-        iconSection.appendChild(iconSizeInput);
-        iconSection.appendChild(iconSvgLabel);
-        iconSection.appendChild(iconSvgInput);
+        iconSectionContent.appendChild(iconsWrap);
+        iconSectionContent.appendChild(iconColorLabel);
+        iconSectionContent.appendChild(iconColorField.container);
+        iconSectionContent.appendChild(iconColorField.matrix);
+        iconSectionContent.appendChild(iconBgLabel);
+        iconSectionContent.appendChild(iconBgField.container);
+        iconSectionContent.appendChild(iconBgField.matrix);
+        iconSectionContent.appendChild(iconSizeLabel);
+        iconSectionContent.appendChild(iconSizeInput);
+        iconSectionContent.appendChild(iconSvgLabel);
+        iconSectionContent.appendChild(iconSvgInput);
 
-        titleSection.appendChild(renameLabel);
-        titleSection.appendChild(renameInput);
-        titleSection.appendChild(pinLabel);
-        titleSection.appendChild(pinSelect);
-        titleSection.appendChild(alignLabel);
-        titleSection.appendChild(alignGroup);
-        titleSection.appendChild(styleLabel);
-        titleSection.appendChild(styleGroup);
-        titleSection.appendChild(fontLabel);
-        titleSection.appendChild(fontSelect);
-        titleSection.appendChild(sizeLabel);
-        titleSection.appendChild(sizeInput);
-        titleSection.appendChild(textWrap);
-        titleSection.appendChild(textLabel);
-        titleSection.appendChild(textColorField.container);
-        titleSection.appendChild(textColorField.matrix);
+        titleSectionContent.appendChild(renameLabel);
+        titleSectionContent.appendChild(renameInput);
+        titleSectionContent.appendChild(pinLabel);
+        titleSectionContent.appendChild(pinSelect);
+        titleSectionContent.appendChild(alignLabel);
+        titleSectionContent.appendChild(alignGroup);
+        titleSectionContent.appendChild(styleLabel);
+        titleSectionContent.appendChild(styleGroup);
+        titleSectionContent.appendChild(fontLabel);
+        titleSectionContent.appendChild(fontSelect);
+        titleSectionContent.appendChild(sizeLabel);
+        titleSectionContent.appendChild(sizeInput);
+        titleSectionContent.appendChild(textWrap);
+        titleSectionContent.appendChild(textLabel);
+        titleSectionContent.appendChild(textColorField.container);
+        titleSectionContent.appendChild(textColorField.matrix);
 
-        valuesSection.appendChild(cellStyleLabel);
-        valuesSection.appendChild(cellStyleSelect);
-        valuesSection.appendChild(badgeOptionsWrap);
+        valuesSectionContent.appendChild(cellStyleLabel);
+        valuesSectionContent.appendChild(cellStyleSelect);
+        valuesSectionContent.appendChild(badgeOptionsWrap);
 
         panel.appendChild(iconSection);
         panel.appendChild(titleSection);
@@ -3270,10 +3463,8 @@ export class AdvancedModernTable {
         panel.appendChild(actions);
 
         if (this.config.enableConditionalFormatting) {
-            const condTitle = document.createElement("div");
-            condTitle.className = "mt-colfmt-panel-title";
-            condTitle.textContent = "Regra condicional";
-            panel.appendChild(condTitle);
+            const { section: condSection, content: condSectionContent } = makeSection("⚡", "Regra condicional", false);
+            panel.appendChild(condSection);
 
             const condSelect = document.createElement("select");
             condSelect.className = "mt-cond-select";
@@ -3423,21 +3614,21 @@ export class AdvancedModernTable {
             condActions.appendChild(clearRuleBtn);
             condActions.appendChild(applyRuleBtn);
 
-            valuesSection.appendChild(condSelect);
-            valuesSection.appendChild(valueInput);
-            valuesSection.appendChild(valueInput2);
-            valuesSection.appendChild(bgLabel);
-            valuesSection.appendChild(bgField.container);
-            valuesSection.appendChild(bgField.matrix);
-            valuesSection.appendChild(condShapeLabel);
-            valuesSection.appendChild(condShapeSelect);
-            valuesSection.appendChild(condIconLabel);
-            valuesSection.appendChild(condIconSelect);
-            valuesSection.appendChild(condTextWrap);
-            valuesSection.appendChild(condTextLabel);
-            valuesSection.appendChild(condTextField.container);
-            valuesSection.appendChild(condTextField.matrix);
-            valuesSection.appendChild(condActions);
+            condSectionContent.appendChild(condSelect);
+            condSectionContent.appendChild(valueInput);
+            condSectionContent.appendChild(valueInput2);
+            condSectionContent.appendChild(bgLabel);
+            condSectionContent.appendChild(bgField.container);
+            condSectionContent.appendChild(bgField.matrix);
+            condSectionContent.appendChild(condShapeLabel);
+            condSectionContent.appendChild(condShapeSelect);
+            condSectionContent.appendChild(condIconLabel);
+            condSectionContent.appendChild(condIconSelect);
+            condSectionContent.appendChild(condTextWrap);
+            condSectionContent.appendChild(condTextLabel);
+            condSectionContent.appendChild(condTextField.container);
+            condSectionContent.appendChild(condTextField.matrix);
+            condSectionContent.appendChild(condActions);
         }
 
         this.container.style.position = "relative";
@@ -3461,6 +3652,125 @@ export class AdvancedModernTable {
         const existing = this.container.querySelector(".mt-colfmt-panel");
         if (existing) existing.remove();
         this.activeColumnFormatPanelColName = null;
+    }
+
+    private openHeaderContextMenu(col: IAdvancedColumn, x: number, y: number): void {
+        this.closeHeaderContextMenu();
+        this.closeFilterPanel();
+        this.closeColumnFormatPanel();
+
+        const menu = document.createElement("div");
+        menu.className = "mt-ctx-menu";
+        menu.style.position = "fixed";
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+
+        const makeItem = (icon: string, label: string, onClick: () => void, danger = false) => {
+            const item = document.createElement("button");
+            item.type = "button";
+            item.className = "mt-ctx-menu-item" + (danger ? " mt-ctx-menu-item-danger" : "");
+            const iconEl = document.createElement("span");
+            iconEl.className = "mt-ctx-menu-item-icon";
+            iconEl.textContent = icon;
+            const labelEl = document.createElement("span");
+            labelEl.textContent = label;
+            item.appendChild(iconEl);
+            item.appendChild(labelEl);
+            item.addEventListener("click", () => { this.closeHeaderContextMenu(); onClick(); });
+            return item;
+        };
+
+        const sep = () => {
+            const s = document.createElement("div");
+            s.className = "mt-ctx-menu-sep";
+            return s;
+        };
+
+        const isNumeric = col.dataType === "number" || col.dataType === "currency" || col.dataType === "percentage";
+        menu.appendChild(makeItem("↑", isNumeric ? "Menor → maior" : "A → Z", () => {
+            this.setSortingModel(col.name, "asc", false);
+            this.config.currentPage = 1;
+            this.render();
+        }));
+        menu.appendChild(makeItem("↓", isNumeric ? "Maior → menor" : "Z → A", () => {
+            this.setSortingModel(col.name, "desc", false);
+            this.config.currentPage = 1;
+            this.render();
+        }));
+
+        menu.appendChild(sep());
+
+        if (col.filterable) {
+            menu.appendChild(makeItem("⌕", "Filtrar coluna", () => {
+                const th = this.container.querySelector<HTMLElement>(`.mt-th[data-col="${col.name}"]`);
+                if (th) this.openFilterPanel(col, th);
+            }));
+        }
+        menu.appendChild(makeItem("⋮", "Formatar coluna", () => {
+            const th = this.container.querySelector<HTMLElement>(`.mt-th[data-col="${col.name}"]`);
+            if (th) this.openColumnFormatPanel(col, th);
+        }));
+
+        menu.appendChild(sep());
+
+        if (col.pinned !== "left") {
+            menu.appendChild(makeItem("◀", "Fixar à esquerda", () => {
+                this.columnPinOverrides.set(col.name, "left");
+                this.columns = this.columns.map(c => c.name === col.name ? { ...c, pinned: "left" as const } : c);
+                this.emitOnObjectStateChanged();
+                this.render();
+            }));
+        }
+        if (col.pinned !== "right") {
+            menu.appendChild(makeItem("▶", "Fixar à direita", () => {
+                this.columnPinOverrides.set(col.name, "right");
+                this.columns = this.columns.map(c => c.name === col.name ? { ...c, pinned: "right" as const } : c);
+                this.emitOnObjectStateChanged();
+                this.render();
+            }));
+        }
+        if (col.pinned) {
+            menu.appendChild(makeItem("✕", "Desafixar", () => {
+                this.columnPinOverrides.set(col.name, null);
+                this.columns = this.columns.map(c => c.name === col.name ? { ...c, pinned: null } : c);
+                this.emitOnObjectStateChanged();
+                this.render();
+            }));
+        }
+
+        menu.appendChild(sep());
+        menu.appendChild(makeItem("◌", "Ocultar coluna", () => {
+            this.columns = this.columns.map(c => c.name === col.name ? { ...c, visible: false } : c);
+            this.emitOnObjectStateChanged();
+            this.render();
+        }, true));
+
+        document.body.appendChild(menu);
+        (this as any)._contextMenu = menu;
+
+        requestAnimationFrame(() => {
+            const r = menu.getBoundingClientRect();
+            if (r.right > window.innerWidth) menu.style.left = `${x - r.width}px`;
+            if (r.bottom > window.innerHeight) menu.style.top = `${y - r.height}px`;
+        });
+
+        const closeOnOutside = (e: MouseEvent) => {
+            if (!menu.contains(e.target as Node)) {
+                this.closeHeaderContextMenu();
+                document.removeEventListener("click", closeOnOutside, true);
+                document.removeEventListener("contextmenu", closeOnOutside, true);
+            }
+        };
+        setTimeout(() => {
+            document.addEventListener("click", closeOnOutside, true);
+            document.addEventListener("contextmenu", closeOnOutside, true);
+        }, 0);
+    }
+
+    private closeHeaderContextMenu(): void {
+        const existing = (this as any)._contextMenu as HTMLElement | null;
+        if (existing?.parentNode) existing.remove();
+        (this as any)._contextMenu = null;
     }
 
     private clearColumnFormattingForColumn(columnName: string): void {
@@ -4448,6 +4758,15 @@ export class AdvancedModernTable {
         }
     }
 
+    private setSvgContent(el: HTMLElement, svgHtml: string): void {
+        el.textContent = "";
+        const doc = new DOMParser().parseFromString(svgHtml, "image/svg+xml");
+        const svg = doc.documentElement;
+        if (svg && svg.nodeName !== "parsererror") {
+            el.appendChild(document.importNode(svg, true));
+        }
+    }
+
     private openIconPickerModal(col: IAdvancedColumn): void {
         // Fechar modal anterior se existir
         const existing = document.querySelector(".mt-icon-picker-modal");
@@ -4465,7 +4784,12 @@ export class AdvancedModernTable {
 
         const header = document.createElement("div");
         header.className = "mt-icon-picker-header";
-        header.innerHTML = `<h3>Escolher ícone para <strong>${col.displayName}</strong></h3>`;
+        const h3 = document.createElement("h3");
+        h3.textContent = "Escolher ícone para ";
+        const strong = document.createElement("strong");
+        strong.textContent = col.displayName;
+        h3.appendChild(strong);
+        header.appendChild(h3);
 
         // Área para texto ou emoji simples
         const textRow = document.createElement("div");
@@ -4513,7 +4837,13 @@ export class AdvancedModernTable {
             const item = document.createElement("button");
             item.className = "mt-icon-picker-item";
             item.setAttribute("data-variant", String(index));
-            item.innerHTML = `<div class=\"mt-icon-picker-preview\">${variant.svg}</div><span>${variant.label}</span>`;
+            const preview = document.createElement("div");
+            preview.className = "mt-icon-picker-preview";
+            this.setSvgContent(preview, variant.svg);
+            const variantLabel = document.createElement("span");
+            variantLabel.textContent = variant.label;
+            item.appendChild(preview);
+            item.appendChild(variantLabel);
             item.addEventListener("click", () => {
                 col.customIcon = variant.svg;
                 backdrop.remove();
@@ -4691,7 +5021,7 @@ export class AdvancedModernTable {
 
             const sortIcon = th.querySelector<HTMLElement>(".mt-sort-icon");
             if (sortIcon) {
-                sortIcon.innerHTML = this.getSortIconSVG(col.name);
+                this.setSvgContent(sortIcon, this.getSortIconSVG(col.name));
                 sortIcon.classList.toggle("mt-sort-active", !!this.getSortMeta(col.name));
             }
 
@@ -4699,7 +5029,7 @@ export class AdvancedModernTable {
             if (filterBtn) {
                 const hasFilter = this.config.filters.has(col.name);
                 filterBtn.classList.toggle("mt-filter-active", hasFilter);
-                filterBtn.innerHTML = this.getFilterIconSVG(hasFilter);
+                this.setSvgContent(filterBtn, this.getFilterIconSVG(hasFilter));
             }
         });
     }

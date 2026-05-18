@@ -26,7 +26,7 @@ export class Visual implements IVisual {
         this.formattingSettingsService = new FormattingSettingsService();
         this.host = options.host;
         this.target = options.element;
-        this.table = new AdvancedModernTable(this.target, {}, (state) => this.persistOnObjectState(state));
+        this.table = new AdvancedModernTable(this.target, {}, (state) => this.persistOnObjectState(state), this.host);
     }
 
     public update(options: VisualUpdateOptions) {
@@ -289,6 +289,7 @@ export class Visual implements IVisual {
 
             // Filters
             showHeaderFilter: tableFeaturesConfig?.showHeaderFilter?.value !== false,
+            showQuickFilter: tableFeaturesConfig?.showQuickFilter?.value === true,
 
             // Layout
             rowHeight: layoutConfig?.rowHeight?.value ?? 40,
@@ -333,6 +334,8 @@ export class Visual implements IVisual {
             iconPreset,
             customColumnIcons,
             enableColumnResize: columnsIconsConfig?.enableColumnResize?.value !== false,
+            iconColor: columnsIconsConfig?.iconColor?.value?.value ?? "",
+            iconBackgroundColor: columnsIconsConfig?.iconBackgroundColor?.value?.value ?? "",
             showRowNumbers: tableFeaturesConfig?.showRowNumbers?.value === true,
             enableRowSelection: tableFeaturesConfig?.enableRowSelection?.value === true,
             enableAnalyticsCellVisuals: tableFeaturesConfig?.enableAnalyticsCellVisuals?.value === true,
@@ -829,7 +832,8 @@ export class Visual implements IVisual {
         return (table.rows ?? []).map((rowData: any, index: number) => ({
             id: index,
             values: rowData as any[],
-            isCalculated: false
+            isCalculated: false,
+            identity: table.identity ? table.identity[index] : undefined
         }));
     }
 
