@@ -97,19 +97,19 @@
 /* ─── Mode Switcher ─────────────────────────────────────────────────────── */
 .mt-mode-switcher {
     position: absolute;
-    right: 14px;
+    left: 14px;
+    right: auto;
     bottom: 14px;
     z-index: 30;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
     padding: 10px;
-    opacity: 0;
+    opacity: 1;
     pointer-events: auto;
     transition: opacity @mt-transition;
 }
 
-.mt-mode-switcher:hover,
 .mt-mode-open {
     opacity: 1;
 }
@@ -145,10 +145,6 @@
 }
 
 .mt-mode-switcher .mt-mode-trigger {
-    opacity: 0;
-}
-
-.mt-mode-switcher:hover .mt-mode-trigger {
     opacity: 1;
 }
 
@@ -374,7 +370,7 @@
     flex-direction: column;
     width: 100%;
     height: 100%;
-    padding: 14px;
+    padding: 14px 14px 86px;
     gap: 12px;
     font-family: @mt-font-family;
     font-size: var(--mt-font-size, 13px);
@@ -804,6 +800,49 @@
     border: 1px solid var(--mt-border-color, #e5e7eb);
     border-radius: 16px;
     box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+.mt-quickbar.mt-quickbar-collapsed {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 40;
+    width: 54px;
+    height: 54px;
+    padding: 0;
+    gap: 0;
+    border-radius: 999px;
+    justify-content: center;
+    align-items: center;
+    background: var(--mt-header-bg-override, var(--mt-header-bg, #0f172a));
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 14px 32px rgba(15, 23, 42, 0.28);
+}
+
+.mt-quickbar.mt-quickbar-collapsed .mt-quickbar-content {
+    display: none !important;
+}
+
+.mt-quickbar.mt-quickbar-collapsed .mt-quickbar-collapse {
+    width: 54px;
+    height: 54px;
+    border-radius: 999px;
+    border: none;
+    background: transparent;
+    color: var(--mt-header-text-override, var(--mt-header-text, #e2e8f0));
+    font-size: 18px;
+    box-shadow: none;
+}
+
+.mt-quickbar.mt-quickbar-collapsed .mt-quickbar-collapse:hover {
+    transform: scale(1.06);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.mt-quickbar.mt-quickbar-collapsed .mt-quickbar-sep,
+.mt-quickbar.mt-quickbar-collapsed .mt-quickbar-toggle,
+.mt-quickbar.mt-quickbar-collapsed .mt-quickbar-search {
+    display: none !important;
 }
 
 .mt-quickbar-search {

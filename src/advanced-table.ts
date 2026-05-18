@@ -428,14 +428,6 @@ export class AdvancedModernTable {
 
         // Keep the grid aligned with container width: the last visible column
         // absorbs any remaining horizontal space.
-        const adjustedTotal = Array.from(widths.values()).reduce((acc, w) => acc + w, 0);
-        if (adjustedTotal < availableWidth && cols.length > 0) {
-            const lastCol = cols[cols.length - 1];
-            const growBy = availableWidth - adjustedTotal;
-            const current = widths.get(lastCol.name) || 0;
-            widths.set(lastCol.name, current + growBy);
-        }
-
         this.autoColumnWidthsPx = widths;
     }
 
@@ -1571,13 +1563,14 @@ export class AdvancedModernTable {
     private renderQuickActionsToolbar(): void {
         const bar = document.createElement("div");
         bar.className = "mt-quickbar";
+        bar.classList.toggle("mt-quickbar-collapsed", this.toolbarCollapsed);
 
         // Botão minimizar/expandir — sempre visível
         const collapseBtn = document.createElement("button");
         collapseBtn.type = "button";
         collapseBtn.className = "mt-quickbar-collapse";
         collapseBtn.title = this.toolbarCollapsed ? "Expandir barra de atalhos" : "Minimizar barra de atalhos";
-        collapseBtn.textContent = this.toolbarCollapsed ? "›" : "‹";
+        collapseBtn.textContent = this.toolbarCollapsed ? "◉" : "‹";
         bar.appendChild(collapseBtn);
 
         // Conteúdo colapsável
@@ -1660,8 +1653,9 @@ export class AdvancedModernTable {
 
         collapseBtn.addEventListener("click", () => {
             this.toolbarCollapsed = !this.toolbarCollapsed;
+            bar.classList.toggle("mt-quickbar-collapsed", this.toolbarCollapsed);
             content.style.display = this.toolbarCollapsed ? "none" : "";
-            collapseBtn.textContent = this.toolbarCollapsed ? "›" : "‹";
+            collapseBtn.textContent = this.toolbarCollapsed ? "◉" : "‹";
             collapseBtn.title = this.toolbarCollapsed ? "Expandir barra de atalhos" : "Minimizar barra de atalhos";
         });
 
