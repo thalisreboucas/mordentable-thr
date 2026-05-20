@@ -494,6 +494,9 @@ export class AdvancedModernTable {
                 this.config.currentPage = totalPages;
             }
         }
+
+        // Apply pixel quality adjustments based on new config dimensions
+        this.applyPixelQualityAdjustments(this.config.tableWidthPx);
     }
 
     public loadOnObjectState(serialized?: string): void {
@@ -872,20 +875,52 @@ export class AdvancedModernTable {
         } else {
             data = [...this.rows];
         }
-        if (this.config.autoSummaryRows.length > 0) {
-            this.config.autoSummaryRows.forEach(({ type, label }) => {
-                const calc = this.buildSummaryRow(type, label);
-                if (calc) data.push(calc);
-            });
-        }
+        // Don't add auto summary rows here - they'll be added per-page
         return data;
     }
 
     private getPagedRows(): IAdvancedRow[] {
         const all = this.getDisplayRows();
-        if (!this.config.enablePagination) return all;
-        const start = (this.config.currentPage - 1) * this.config.pageSize;
-        return all.slice(start, start + this.config.pageSize);
+        if (!this.config.enablePagination) {
+            // No pagination: show all rows + summary at end
+            const result = [...all];
+            if (this.config.autoSummaryRows.length > 0) {
+                this.config.autoSummaryRows.forEach(({ type, label }) => {
+                    const calc = this.buildSummaryRow(type, label, all);
+                    if (calc) result.push(calc);
+                });
+            }
+            return result;
+        }
+
+        // With pagination: show page + page summary + final summary on last page
+        const pageSize = this.config.pageSize;
+        const currentPage = this.config.currentPage;
+        const start = (currentPage - 1) * pageSize;
+        const end = start + pageSize;
+        const pagedData = all.slice(start, end);
+        const result = [...pagedData];
+
+        // Add page-level summary
+        if (this.config.autoSummaryRows.length > 0) {
+            this.config.autoSummaryRows.forEach(({ type, label }) => {
+                const pageLabel = label ? `${label} (página)` : "Total (página)";
+                const calc = this.buildSummaryRow(type, pageLabel, pagedData);
+                if (calc) result.push(calc);
+            });
+        }
+
+        // Add overall summary on last page only
+        const totalPages = Math.ceil(all.length / pageSize);
+        if (currentPage === totalPages && this.config.autoSummaryRows.length > 0) {
+            this.config.autoSummaryRows.forEach(({ type, label }) => {
+                const totalLabel = label ? `${label} (geral)` : "Total (geral)";
+                const calc = this.buildSummaryRow(type, totalLabel, all);
+                if (calc) result.push(calc);
+            });
+        }
+
+        return result;
     }
 
     private buildGroupedRows(rows: IAdvancedRow[]): IAdvancedRow[] {
@@ -1009,8 +1044,8 @@ export class AdvancedModernTable {
         this.render();
     }
 
-    private buildSummaryRow(type: string, label?: string): IAdvancedRow | null {
-        const dataRows = this.rows.filter(r => !r.isCalculated && !r.isSummary && !r.isSubtotal);
+    private buildSummaryRow(type: string, label?: string, dataSource?: IAdvancedRow[]): IAdvancedRow | null {
+        const dataRows = (dataSource || this.rows).filter(r => !r.isCalculated && !r.isSummary && !r.isSubtotal);
         if (!dataRows.length) return null;
         const values = this.columns.map((col, idx) => {
             if (idx === 0) return label || type.toUpperCase();
@@ -1028,7 +1063,7 @@ export class AdvancedModernTable {
             return type === "count" ? dataRows.length : null;
         });
         return {
-            id: `auto_${type}_${Date.now()}`,
+            id: `auto_${type}_${Date.now()}_${Math.random()}`,
             values,
             isCalculated: true,
             isSummary: true,
@@ -1267,7 +1302,7 @@ export class AdvancedModernTable {
         this.container.appendChild(wrapper);
         requestAnimationFrame(() => this.syncComplexHeaderWidths());
         this.renderPagination();
-        this.renderPerformanceModeSwitcher();
+        // Performance mode switcher removed for cleaner UI
     }
 
     private renderPerformanceModeSwitcher(): void {
@@ -2182,6 +2217,11 @@ export class AdvancedModernTable {
         if (this.config.iconBackgroundColor) {
             s.setProperty("--mt-icon-bg", this.config.iconBackgroundColor);
         }
+
+        // Ensure pixel-perfect rendering properties are maintained
+        s.setProperty("-webkit-font-smoothing", "antialiased");
+        s.setProperty("-moz-osx-font-smoothing", "grayscale");
+        s.setProperty("text-rendering", "geometricPrecision");
     }
 
     private applyTableDimensions(wrapper: HTMLElement): void {
@@ -2204,6 +2244,77 @@ export class AdvancedModernTable {
             wrapper.style.removeProperty("max-height");
             wrapper.style.removeProperty("flex");
         }
+
+        // Adjust pixel quality for small tables
+        this.applyPixelQualityAdjustments(width);
+    }
+
+    private applyPixelQualityAdjustments(width: number): void {
+        if (width <= 0) return;
+
+        // Define quality breakpoints with more aggressive scaling
+        const SMALL_TABLE_THRESHOLD = 400;
+        const TINY_TABLE_THRESHOLD = 250;
+
+        let pixelScale = 1;
+        let fontSizeAdjustment = 0;
+
+        if (width < TINY_TABLE_THRESHOLD) {
+            // For very small tables, use 1.25x scale for maximum clarity
+            pixelScale = 1.25;
+            fontSizeAdjustment = 1.5;
+        } else if (width < SMALL_TABLE_THRESHOLD) {
+            // For small tables, use 1.1x scale
+            pixelScale = 1.1;
+            fontSizeAdjustment = 0.75;
+        }
+
+        // Apply transform scale for crisp rendering
+        if (pixelScale > 1) {
+            this.container.style.transformOrigin = "top left";
+            this.container.style.transform = `scale(${pixelScale})`;
+            this.container.style.setProperty("--webkit-transform", `scale(${pixelScale})`);
+        } else {
+            this.container.style.removeProperty("transform");
+        }
+
+        // Adjust font size for better clarity
+        if (fontSizeAdjustment > 0) {
+            const adjustedFontSize = Math.max(11, this.config.fontSize + fontSizeAdjustment);
+            this.container.style.setProperty("--mt-font-size", `${adjustedFontSize}px`);
+        }
+
+        // High DPI detection and optimization
+        const dpr = window.devicePixelRatio || 1;
+        
+        // MAXIMUM quality rendering properties — apply all available optimization techniques
+        this.container.style.setProperty("-webkit-font-smoothing", "subpixel-antialiased");
+        this.container.style.setProperty("-moz-osx-font-smoothing", "grayscale");
+        this.container.style.setProperty("text-rendering", dpr > 1.5 ? "optimizeLegibility" : "geometricPrecision");
+        this.container.style.setProperty("shape-rendering", "crispEdges");
+        this.container.style.setProperty("image-rendering", "-webkit-optimize-contrast");
+        this.container.style.setProperty("image-rendering", "crisp-edges");
+        this.container.style.setProperty("will-change", "transform");
+        this.container.style.setProperty("backface-visibility", "hidden");
+        this.container.style.setProperty("-webkit-backface-visibility", "hidden");
+        
+        // GPU acceleration with 3D transform
+        if (pixelScale > 1) {
+            this.container.style.setProperty("transform", `scale(${pixelScale}) translateZ(0)`);
+        } else {
+            this.container.style.setProperty("transform", "translateZ(0)");
+        }
+        this.container.style.setProperty("-webkit-transform", "translate3d(0, 0, 0)");
+        
+        // Force GPU acceleration for all children with maximum quality
+        const allElements = this.container.querySelectorAll("*");
+        allElements.forEach((el: any) => {
+            el.style.setProperty("-webkit-font-smoothing", "subpixel-antialiased");
+            el.style.setProperty("backface-visibility", "hidden");
+            el.style.setProperty("-webkit-backface-visibility", "hidden");
+            el.style.setProperty("will-change", "transform");
+            el.style.setProperty("transform", "translateZ(0)");
+        });
     }
 
     // ─── Header ───────────────────────────────────────────────────────────────
