@@ -16,7 +16,6 @@ import {
     ColumnFormattingOverride,
     ColumnIconOverride,
     SortDescriptor,
-    MatrixCalcMode,
     PerformancePreset,
     PerformanceOverrides,
     OnObjectPersistedState,
@@ -25,6 +24,19 @@ import {
     OperatorFilter,
     PerformanceManagedKey
 } from "./types";
+import {
+    setSvgContent,
+    getColumnIconSVG,
+    getConditionalIconSVG,
+    getFilterIconSVG,
+    getSortIconSVG as sortIconSVG
+} from "./icons";
+import {
+    hashString,
+    getBadgeColors,
+    isTimelineVisualColumn,
+    isFinanceMetricVisualColumn
+} from "./utils";
 
 // Re-exports para manter compatibilidade com qualquer import legado.
 export type {
@@ -60,9 +72,6 @@ export class AdvancedModernTable {
     private columnDisplayNameOverrides: Map<string, string> = new Map();
     private columnDisplayNameBase: Map<string, string> = new Map();
     private outsideClickHandler: ((e: MouseEvent) => void) | null = null;
-    private activeMatrixMenu: HTMLElement | null = null;
-    private matrixColumnCalculationModes: Map<string, MatrixCalcMode> = new Map();
-    private matrixRowCalculationModes: Map<string, MatrixCalcMode> = new Map();
     private columnIconOverrides: Map<string, ColumnIconOverride> = new Map();
     private columnPinOverrides: Map<string, "left" | "right" | null> = new Map();
     private dataBarStats: Map<string, { min: number; max: number }> = new Map();
@@ -136,7 +145,7 @@ export class AdvancedModernTable {
             striped: true,
             borderless: false,
             compact: false,
-            fontSize: 13,
+            fontSize: 12,
             showColumnIcons: true,
             iconPreset: "minimal",
             customColumnIcons: {},
@@ -158,7 +167,7 @@ export class AdvancedModernTable {
                 return;
             }
 
-            const panels = this.container.querySelectorAll(".mt-filter-panel, .mt-colfmt-panel, .mt-matrix-menu");
+            const panels = this.container.querySelectorAll(".mt-filter-panel, .mt-colfmt-panel");
             let clickedInsidePanel = false;
             panels.forEach(panel => {
                 if (panel.contains(target)) clickedInsidePanel = true;
@@ -168,14 +177,13 @@ export class AdvancedModernTable {
             const modeSwitcher = this.container.querySelector(".mt-mode-switcher");
             if (modeSwitcher && modeSwitcher.contains(target)) return;
 
-            const filterBtns = this.container.querySelectorAll(".mt-filter-btn, .mt-colfmt-btn, .mt-matrix-menu-trigger");
+            const filterBtns = this.container.querySelectorAll(".mt-filter-btn, .mt-colfmt-btn");
             let clickedBtn = false;
             filterBtns.forEach(btn => { if (btn.contains(target)) clickedBtn = true; });
             if (!clickedBtn) {
                 this.closeFilterPanel();
                 this.closeConditionalPanel();
                 this.closeColumnFormatPanel();
-                this.closeMatrixMenu();
             }
         };
         document.addEventListener("mousedown", this.outsideClickHandler);
@@ -898,67 +906,6 @@ export class AdvancedModernTable {
         return {};
     }
 
-    private getBadgeColors(value: any, palette: "soft" | "vivid" = "soft"): { bg: string; color: string } {
-        const key = String(value ?? "");
-        const palettes = {
-            soft: [
-                { bg: "#e0f2fe", color: "#0369a1" },
-                { bg: "#dcfce7", color: "#15803d" },
-                { bg: "#fee2e2", color: "#b91c1c" },
-                { bg: "#fef3c7", color: "#b45309" },
-                { bg: "#ede9fe", color: "#6d28d9" },
-                { bg: "#fce7f3", color: "#be185d" },
-                { bg: "#cffafe", color: "#0e7490" },
-                { bg: "#e2e8f0", color: "#334155" }
-            ],
-            vivid: [
-                { bg: "#22c55e", color: "#052e16" },
-                { bg: "#f97316", color: "#431407" },
-                { bg: "#3b82f6", color: "#1e3a8a" },
-                { bg: "#f43f5e", color: "#4c0519" },
-                { bg: "#a855f7", color: "#3b0764" },
-                { bg: "#eab308", color: "#422006" }
-            ]
-        } as const;
-        const list = palettes[palette] || palettes.soft;
-        const idx = this.hashString(key) % list.length;
-        return list[idx];
-    }
-
-    private hashString(value: string): number {
-        let hash = 0;
-        for (let i = 0; i < value.length; i += 1) {
-            hash = (hash << 5) - hash + value.charCodeAt(i);
-            hash |= 0;
-        }
-        return Math.abs(hash);
-    }
-
-    private getConditionalIconSVG(variant: string): string {
-        const icons: Record<string, string> = {
-            check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
-            alert: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>',
-            dot: '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>',
-            star: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>',
-            arrowUp: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 4l-6 6h4v10h4V10h4z"/></svg>',
-            arrowDown: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 20l6-6h-4V4h-4v10H6z"/></svg>'
-        };
-        return icons[variant] || "";
-    }
-
-    private isTimelineVisualColumn(col: IAdvancedColumn): boolean {
-        const key = `${col.name} ${col.displayName}`.toLowerCase();
-        return key.includes("timeline") || key.includes("tendencia") || key.includes("spark");
-    }
-
-    private isFinanceMetricVisualColumn(col: IAdvancedColumn): boolean {
-        const key = `${col.name} ${col.displayName}`.toLowerCase();
-        return key.includes("p&l")
-            || key.includes("pnl")
-            || key.includes("total value")
-            || key.includes("valor total");
-    }
-
     private resolveSparklineData(value: any, row: IAdvancedRow, col: IAdvancedColumn): number[] {
         if (Array.isArray(value)) {
             const nums = value.map(v => Number(v)).filter(v => !isNaN(v));
@@ -972,9 +919,9 @@ export class AdvancedModernTable {
 
         const seed = `${row.id}|${col.name}|${value ?? ""}`;
         const points: number[] = [];
-        let base = 40 + (this.hashString(seed) % 30);
+        let base = 40 + (hashString(seed) % 30);
         for (let i = 0; i < 24; i += 1) {
-            const drift = ((this.hashString(`${seed}:${i}`) % 11) - 5);
+            const drift = ((hashString(`${seed}:${i}`) % 11) - 5);
             base = Math.max(5, Math.min(95, base + drift));
             points.push(base);
         }
@@ -1040,7 +987,6 @@ export class AdvancedModernTable {
         this.closeFilterPanel();
         this.closeConditionalPanel();
         this.closeColumnFormatPanel();
-        this.closeMatrixMenu();
 
         while (this.container.firstChild) {
             this.container.removeChild(this.container.firstChild);
@@ -1250,465 +1196,6 @@ export class AdvancedModernTable {
         toolbar.appendChild(expandBtn);
         toolbar.appendChild(collapseBtn);
         this.container.appendChild(toolbar);
-    }
-
-    private buildMatrixData(): {
-        rowLabelCount: number;
-        rowLabelColumns: IAdvancedColumn[];
-        valueColumns: IAdvancedColumn[];
-        rows: Array<{ id: string | number; key: string; labels: string[]; values: number[]; total: number }>;
-        columnTotals: number[];
-        grandTotal: number;
-    } {
-        const rowLabelCount = this.getMatrixRowLabelCount();
-        const rowLabelColumns = this.columns.slice(0, rowLabelCount);
-        const valueColumns = this.columns.slice(rowLabelCount);
-        const dataRows = this.rows.filter(row => !row.isCalculated && !row.isSummary && !row.isSubtotal);
-
-        const rows = dataRows.map((row, rowIndex) => {
-            const labels = rowLabelColumns.map((_, labelIndex) => String(row.values[labelIndex] ?? ""));
-            const values = valueColumns.map((_, valueIndex) => this.normalizeMatrixNumber(row.values[rowLabelCount + valueIndex]));
-            const key = labels.join("\u001f") || String(row.id ?? rowIndex);
-            const total = this.calculateMatrixAggregate(values, this.matrixRowCalculationModes.get(key) ?? "sum");
-            return { id: row.id, key, labels, values, total };
-        });
-
-        const columnTotals = valueColumns.map((col, valueIndex) => {
-            const values = rows.map(row => row.values[valueIndex]);
-            return this.calculateMatrixAggregate(values, this.matrixColumnCalculationModes.get(col.name) ?? "sum");
-        });
-
-        const grandTotal = this.calculateMatrixAggregate(rows.map(row => row.total), "sum");
-
-        return { rowLabelCount, rowLabelColumns, valueColumns, rows, columnTotals, grandTotal };
-    }
-
-    private renderMatrix(): void {
-        const wrapper = document.createElement("div");
-        wrapper.className = "mt-table-wrapper";
-        this.applyTableDimensions(wrapper);
-
-        const table = document.createElement("div");
-        table.className = "mt-table";
-        table.setAttribute("role", "table");
-
-        const matrixData = this.buildMatrixData();
-        this.renderMatrixHeader(table, matrixData);
-        this.renderMatrixBody(table, matrixData);
-
-        wrapper.appendChild(table);
-        this.container.appendChild(wrapper);
-        this.renderPagination();
-    }
-
-    private getMatrixRowLabelCount(): number {
-        const firstMeasureIndex = this.columns.findIndex(col => col.dataType === "number" || col.dataType === "currency" || col.dataType === "percentage");
-        if (firstMeasureIndex > 0) return firstMeasureIndex;
-        return Math.max(1, this.columns.length > 1 ? this.columns.length - 1 : 1);
-    }
-
-    private normalizeMatrixNumber(value: any): number {
-        if (typeof value === "number") return value;
-        const parsed = parseFloat(String(value));
-        return isNaN(parsed) ? 0 : parsed;
-    }
-
-    private calculateMatrixAggregate(values: number[], mode: MatrixCalcMode): number {
-        const filtered = values.filter(value => typeof value === "number" && !isNaN(value));
-        if (!filtered.length) return 0;
-
-        switch (mode) {
-            case "average":
-                return filtered.reduce((sum, value) => sum + value, 0) / filtered.length;
-            case "count":
-                return filtered.length;
-            case "min":
-                return Math.min(...filtered);
-            case "max":
-                return Math.max(...filtered);
-            case "sum":
-            default:
-                return filtered.reduce((sum, value) => sum + value, 0);
-        }
-    }
-
-    private renderMatrixHeader(table: HTMLElement, matrixData: ReturnType<typeof this.buildMatrixData>): void {
-        const thead = document.createElement("div");
-        thead.className = "mt-thead";
-        thead.setAttribute("role", "rowgroup");
-
-        const tr = document.createElement("div");
-        tr.className = "mt-tr mt-tr-header";
-        tr.setAttribute("role", "row");
-
-        matrixData.rowLabelColumns.forEach((col, index) => {
-            const th = document.createElement("div");
-            th.className = "mt-th mt-th-matrix-label";
-            th.setAttribute("role", "columnheader");
-            th.setAttribute("data-col", col.name);
-
-            const inner = document.createElement("div");
-            inner.className = "mt-th-inner";
-
-            const icon = document.createElement("span");
-            icon.className = "mt-col-icon mt-col-icon-matrix";
-            icon.textContent = "Aa";
-            inner.appendChild(icon);
-
-            const title = document.createElement("span");
-            title.className = "mt-col-title";
-            title.textContent = col.displayName || `Linha ${index + 1}`;
-            inner.appendChild(title);
-
-            if (col.sortable) {
-                const sortBtn = document.createElement("button");
-                sortBtn.className = "mt-filter-btn mt-matrix-sort-btn";
-                sortBtn.setAttribute("aria-label", `Ordenar ${col.displayName}`);
-                this.setSvgContent(sortBtn, this.getSortIconSVG(col.name));
-                if (this.config.sortColumn === col.name) {
-                    sortBtn.classList.add("mt-matrix-sort-active");
-                }
-                sortBtn.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    const newDir: "asc" | "desc" =
-                        this.config.sortColumn === col.name && this.config.sortDirection === "asc"
-                            ? "desc"
-                            : "asc";
-                    this.setSortingModel(col.name, newDir, !!e.shiftKey);
-                    this.config.currentPage = 1;
-                    this.render();
-                });
-                inner.appendChild(sortBtn);
-            }
-
-            if (col.filterable && this.config.showHeaderFilter) {
-                const filterBtn = document.createElement("button");
-                filterBtn.className = "mt-filter-btn";
-                filterBtn.setAttribute("aria-label", `Filtrar ${col.displayName}`);
-                const hasFilter = this.config.filters.has(col.name);
-                if (hasFilter) filterBtn.classList.add("mt-filter-active");
-                this.setSvgContent(filterBtn, this.getFilterIconSVG(hasFilter));
-                filterBtn.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    if (this.activePanelColName === col.name) {
-                        this.closeFilterPanel();
-                    } else {
-                        this.openFilterPanel(col, th);
-                    }
-                });
-                inner.appendChild(filterBtn);
-            }
-
-            th.appendChild(inner);
-            this.applyColWidth(th, col);
-            tr.appendChild(th);
-        });
-
-        matrixData.valueColumns.forEach(col => {
-            const th = document.createElement("div");
-            th.className = "mt-th mt-th-matrix-value";
-            th.setAttribute("role", "columnheader");
-            th.setAttribute("data-col", col.name);
-            this.applyColWidth(th, col);
-
-            const inner = document.createElement("div");
-            inner.className = "mt-th-inner";
-
-            const icon = document.createElement("span");
-            icon.className = "mt-col-icon mt-col-icon-matrix";
-            icon.textContent = "#";
-            inner.appendChild(icon);
-
-            const title = document.createElement("span");
-            title.className = "mt-col-title";
-            title.textContent = col.displayName;
-            inner.appendChild(title);
-
-            const actions = document.createElement("div");
-            actions.className = "mt-matrix-header-actions";
-
-            if (col.sortable) {
-                const sortBtn = document.createElement("button");
-                sortBtn.className = "mt-filter-btn mt-matrix-sort-btn";
-                sortBtn.setAttribute("aria-label", `Ordenar ${col.displayName}`);
-                this.setSvgContent(sortBtn, this.getSortIconSVG(col.name));
-                if (this.config.sortColumn === col.name) {
-                    sortBtn.classList.add("mt-matrix-sort-active");
-                }
-                sortBtn.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    const newDir: "asc" | "desc" =
-                        this.config.sortColumn === col.name && this.config.sortDirection === "asc"
-                            ? "desc"
-                            : "asc";
-                    this.setSortingModel(col.name, newDir, !!e.shiftKey);
-                    this.config.currentPage = 1;
-                    this.render();
-                });
-                actions.appendChild(sortBtn);
-            }
-
-            if (col.filterable && this.config.showHeaderFilter) {
-                const filterBtn = document.createElement("button");
-                filterBtn.className = "mt-filter-btn";
-                filterBtn.setAttribute("aria-label", `Filtrar ${col.displayName}`);
-                const hasFilter = this.config.filters.has(col.name);
-                if (hasFilter) filterBtn.classList.add("mt-filter-active");
-                this.setSvgContent(filterBtn, this.getFilterIconSVG(hasFilter));
-                filterBtn.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    if (this.activePanelColName === col.name) {
-                        this.closeFilterPanel();
-                    } else {
-                        this.openFilterPanel(col, th);
-                    }
-                });
-                actions.appendChild(filterBtn);
-            }
-
-            const trigger = this.createMatrixMenuTrigger("⋯", "Personalizar total da coluna");
-            trigger.addEventListener("click", (e) => {
-                e.stopPropagation();
-                this.openMatrixMenu(trigger, this.getMatrixColumnMenuItems(col));
-            });
-            actions.appendChild(trigger);
-            inner.appendChild(actions);
-
-            th.appendChild(inner);
-            tr.appendChild(th);
-        });
-
-        const totalHeader = document.createElement("div");
-        totalHeader.className = "mt-th mt-th-matrix-total";
-        totalHeader.setAttribute("role", "columnheader");
-        totalHeader.textContent = "Total";
-        tr.appendChild(totalHeader);
-
-        thead.appendChild(tr);
-        table.appendChild(thead);
-    }
-
-    private renderMatrixBody(table: HTMLElement, matrixData: ReturnType<typeof this.buildMatrixData>): void {
-        const tbody = document.createElement("div");
-        tbody.className = "mt-tbody";
-        tbody.setAttribute("role", "rowgroup");
-
-        if (!matrixData.rows.length) {
-            const empty = document.createElement("div");
-            empty.className = "mt-empty";
-            const label = document.createElement("span");
-            label.textContent = "Nenhum dado disponível";
-            empty.appendChild(label);
-            tbody.appendChild(empty);
-            table.appendChild(tbody);
-            return;
-        }
-
-        matrixData.rows.forEach((row, rowIndex) => {
-            const tr = document.createElement("div");
-            tr.className = "mt-tr mt-tr-matrix";
-            tr.setAttribute("role", "row");
-
-            row.labels.forEach((label, labelIndex) => {
-                const td = document.createElement("div");
-                td.className = labelIndex === 0 ? "mt-td mt-td-label mt-td-matrix-label" : "mt-td mt-td-matrix-sub-label";
-                td.setAttribute("role", "cell");
-                td.textContent = label || "(vazio)";
-                this.applyColWidth(td, matrixData.rowLabelColumns[labelIndex]);
-
-                if (labelIndex === 0) {
-                    const trigger = this.createMatrixMenuTrigger("⋯", "Modificar cálculo da linha");
-                    trigger.addEventListener("click", (e) => {
-                        e.stopPropagation();
-                        this.openMatrixMenu(trigger, this.getMatrixRowMenuItems(row));
-                    });
-                    td.appendChild(trigger);
-                }
-
-                tr.appendChild(td);
-            });
-
-            row.values.forEach((value, valueIndex) => {
-                const col = matrixData.valueColumns[valueIndex];
-                const td = document.createElement("div");
-                td.className = "mt-td mt-td-matrix-value";
-                td.setAttribute("role", "cell");
-                td.style.textAlign = "right";
-                td.textContent = this.formatCellValue(value, col);
-                this.applyColWidth(td, col);
-
-                if (this.config.striped) {
-                    td.style.backgroundColor = rowIndex % 2 === 0 ? "var(--mt-row-base-override, var(--mt-bg))" : "var(--mt-row-alt-override, var(--mt-row-alt))";
-                }
-
-                tr.appendChild(td);
-            });
-
-            const totalCell = document.createElement("div");
-            totalCell.className = "mt-td mt-td-matrix-total";
-            totalCell.setAttribute("role", "cell");
-            totalCell.style.textAlign = "right";
-            const totalMeta = matrixData.valueColumns[0] ?? {
-                name: "total",
-                displayName: "Total",
-                index: 0,
-                width: 100,
-                sortable: true,
-                filterable: true,
-                visible: true,
-                editable: false,
-                resizable: false,
-                dataType: "number" as const,
-                alignment: "right" as const
-            };
-            totalCell.textContent = this.formatCellValue(row.total, totalMeta);
-            tr.appendChild(totalCell);
-
-            tbody.appendChild(tr);
-        });
-
-        const totalRow = document.createElement("div");
-        totalRow.className = "mt-tr mt-tr-total mt-tr-matrix-total";
-        totalRow.setAttribute("role", "row");
-
-        matrixData.rowLabelColumns.forEach((_, index) => {
-            const td = document.createElement("div");
-            td.className = index === 0 ? "mt-td mt-td-total" : "mt-td";
-            td.setAttribute("role", "cell");
-            td.textContent = index === 0 ? "Total Geral" : "";
-            totalRow.appendChild(td);
-        });
-
-        matrixData.valueColumns.forEach((col, valueIndex) => {
-            const td = document.createElement("div");
-            td.className = "mt-td mt-td-total";
-            td.setAttribute("role", "cell");
-            td.style.textAlign = "right";
-            td.textContent = this.formatCellValue(matrixData.columnTotals[valueIndex], { ...col, dataType: "number", alignment: "right" });
-            totalRow.appendChild(td);
-        });
-
-        const grandTotalCell = document.createElement("div");
-        grandTotalCell.className = "mt-td mt-td-total";
-        grandTotalCell.setAttribute("role", "cell");
-        grandTotalCell.style.textAlign = "right";
-        grandTotalCell.textContent = this.formatCellValue(matrixData.grandTotal, {
-            name: "grand_total",
-            displayName: "Total",
-            index: 0,
-            width: 100,
-            sortable: true,
-            filterable: true,
-            visible: true,
-            editable: false,
-            resizable: false,
-            dataType: "number",
-            alignment: "right"
-        });
-        totalRow.appendChild(grandTotalCell);
-
-        tbody.appendChild(totalRow);
-        table.appendChild(tbody);
-    }
-
-    private createMatrixMenuTrigger(text: string, ariaLabel: string): HTMLButtonElement {
-        const trigger = document.createElement("button");
-        trigger.type = "button";
-        trigger.className = "mt-matrix-menu-trigger";
-        trigger.textContent = text;
-        trigger.title = ariaLabel;
-        trigger.setAttribute("aria-label", ariaLabel);
-        return trigger;
-    }
-
-    private getMatrixColumnMenuItems(col: IAdvancedColumn): Array<{ label: string; hint: string; active: boolean; action: () => void }> {
-        const activeMode = this.matrixColumnCalculationModes.get(col.name) ?? "sum";
-        const modes: Array<{ mode: MatrixCalcMode; label: string; hint: string }> = [
-            { mode: "sum", label: "Somar", hint: "Totaliza os valores da coluna" },
-            { mode: "average", label: "Média", hint: "Média dos valores da coluna" },
-            { mode: "count", label: "Contagem", hint: "Conta os valores da coluna" },
-            { mode: "min", label: "Mínimo", hint: "Menor valor da coluna" },
-            { mode: "max", label: "Máximo", hint: "Maior valor da coluna" }
-        ];
-
-        return modes.map(item => ({
-            label: item.label,
-            hint: item.hint,
-            active: activeMode === item.mode,
-            action: () => {
-                this.matrixColumnCalculationModes.set(col.name, item.mode);
-                this.render();
-            }
-        }));
-    }
-
-    private getMatrixRowMenuItems(row: { key: string }): Array<{ label: string; hint: string; active: boolean; action: () => void }> {
-        const activeMode = this.matrixRowCalculationModes.get(row.key) ?? "sum";
-        const modes: Array<{ mode: MatrixCalcMode; label: string; hint: string }> = [
-            { mode: "sum", label: "Somar", hint: "Totaliza a linha" },
-            { mode: "average", label: "Média", hint: "Média da linha" },
-            { mode: "count", label: "Contagem", hint: "Conta os valores da linha" },
-            { mode: "min", label: "Mínimo", hint: "Menor valor da linha" },
-            { mode: "max", label: "Máximo", hint: "Maior valor da linha" }
-        ];
-
-        return modes.map(item => ({
-            label: item.label,
-            hint: item.hint,
-            active: activeMode === item.mode,
-            action: () => {
-                this.matrixRowCalculationModes.set(row.key, item.mode);
-                this.render();
-            }
-        }));
-    }
-
-    private openMatrixMenu(anchor: HTMLElement, items: Array<{ label: string; hint: string; active: boolean; action: () => void }>): void {
-        this.closeMatrixMenu();
-
-        const menu = document.createElement("div");
-        menu.className = "mt-matrix-menu";
-
-        const anchorRect = anchor.getBoundingClientRect();
-        const containerRect = this.container.getBoundingClientRect();
-        const left = Math.max(8, Math.min(anchorRect.left - containerRect.left, containerRect.width - 220));
-        const top = Math.max(8, anchorRect.bottom - containerRect.top + 4);
-        menu.style.left = `${left}px`;
-        menu.style.top = `${top}px`;
-
-        items.forEach(item => {
-            const button = document.createElement("button");
-            button.type = "button";
-            button.className = "mt-matrix-menu-item";
-            if (item.active) button.classList.add("mt-matrix-menu-item-active");
-
-            const title = document.createElement("span");
-            title.className = "mt-matrix-menu-title";
-            title.textContent = item.label;
-
-            const hint = document.createElement("span");
-            hint.className = "mt-matrix-menu-hint";
-            hint.textContent = item.hint;
-
-            button.appendChild(title);
-            button.appendChild(hint);
-            button.addEventListener("click", (e) => {
-                e.stopPropagation();
-                item.action();
-            });
-
-            menu.appendChild(button);
-        });
-
-        this.container.appendChild(menu);
-        this.activeMatrixMenu = menu;
-    }
-
-    private closeMatrixMenu(): void {
-        if (this.activeMatrixMenu) {
-            this.activeMatrixMenu.remove();
-            this.activeMatrixMenu = null;
-        }
     }
 
     private applyThemeVariables(): void {
@@ -1976,8 +1463,8 @@ export class AdvancedModernTable {
             iconContainer.setAttribute("data-col-name", col.name);
             iconContainer.style.cursor = "pointer";
             const iconOverride = this.columnIconOverrides.get(col.name);
-            const svgHtml = iconOverride?.svg || this.getColumnIconSVG(col);
-            this.setSvgContent(iconContainer, svgHtml);
+            const svgHtml = iconOverride?.svg || getColumnIconSVG(col);
+            setSvgContent(iconContainer, svgHtml);
             if (iconOverride?.backgroundColor) iconContainer.style.backgroundColor = iconOverride.backgroundColor;
             if (iconOverride?.color) iconContainer.style.color = iconOverride.color;
             if (iconOverride?.size) {
@@ -2014,7 +1501,7 @@ export class AdvancedModernTable {
                 sortIconContainer.classList.add("mt-sort-active");
             }
             const svgHtml = this.getSortIconSVG(col.name);
-            this.setSvgContent(sortIconContainer, svgHtml);
+            setSvgContent(sortIconContainer, svgHtml);
             inner.appendChild(sortIconContainer);
 
             if (sortMeta && this.sortModel.length > 1) {
@@ -2047,8 +1534,8 @@ export class AdvancedModernTable {
             filterBtn.setAttribute("aria-label", `Filtrar ${col.displayName}`);
             const hasFilter = this.config.filters.has(col.name);
             if (hasFilter) filterBtn.classList.add("mt-filter-active");
-            const svgHtml = this.getFilterIconSVG(hasFilter);
-            this.setSvgContent(filterBtn, svgHtml);
+            const svgHtml = getFilterIconSVG(hasFilter);
+            setSvgContent(filterBtn, svgHtml);
             filterBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
                 if (this.activePanelColName === col.name) {
@@ -2443,9 +1930,9 @@ export class AdvancedModernTable {
                 inner.appendChild(label);
                 td.appendChild(inner);
             } else {
-                if (this.config.enableAnalyticsCellVisuals && this.isTimelineVisualColumn(col)) {
+                if (this.config.enableAnalyticsCellVisuals && isTimelineVisualColumn(col)) {
                     this.appendSparklineCell(td, this.resolveSparklineData(value, row, col));
-                } else if (this.config.enableAnalyticsCellVisuals && this.isFinanceMetricVisualColumn(col)) {
+                } else if (this.config.enableAnalyticsCellVisuals && isFinanceMetricVisualColumn(col)) {
                     this.appendFinanceMetricCell(td, value, formatted);
                 } else if (useProgress && typeof value === "number") {
                     td.classList.add("mt-td-bar");
@@ -2477,7 +1964,7 @@ export class AdvancedModernTable {
                         if (cfStyle.bg) badge.style.backgroundColor = cfStyle.bg;
                         if (cfStyle.color) badge.style.color = cfStyle.color;
                     } else {
-                        const colors = this.getBadgeColors(formatted, col.badgePalette || "soft");
+                        const colors = getBadgeColors(formatted, col.badgePalette || "soft");
                         badge.style.backgroundColor = colors.bg;
                         badge.style.color = colors.color;
                     }
@@ -2485,11 +1972,11 @@ export class AdvancedModernTable {
                     if (cfStyle.bold) badge.style.fontWeight = "600";
 
                     if (cfStyle.iconVariant) {
-                        const icon = this.getConditionalIconSVG(cfStyle.iconVariant);
+                        const icon = getConditionalIconSVG(cfStyle.iconVariant);
                         if (icon) {
                             const iconSpan = document.createElement("span");
                             iconSpan.className = "mt-cond-badge-icon";
-                            this.setSvgContent(iconSpan, icon);
+                            setSvgContent(iconSpan, icon);
                             badge.appendChild(iconSpan);
                         }
                     }
@@ -2514,7 +2001,6 @@ export class AdvancedModernTable {
 
     private openColumnFormatPanel(col: IAdvancedColumn, triggerEl: HTMLElement): void {
         this.closeFilterPanel();
-        this.closeMatrixMenu();
         this.closeColumnFormatPanel();
         this.activeColumnFormatPanelColName = col.name;
 
@@ -4345,26 +3831,6 @@ export class AdvancedModernTable {
         return presets[presetName][col.dataType] || presets.minimal.text;
     }
 
-    private getColumnIconSVG(col: IAdvancedColumn): string {
-        if (col.customIcon) return col.customIcon;
-
-        const iconMap: Record<IAdvancedColumn["dataType"], string> = {
-            text: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none"><text x="50%" y="50%" text-anchor="middle" dy=".3em" style="font-size:12px;font-weight:bold">Aa</text></svg>',
-            number: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M2 3h20v2H2zm0 8h20v2H2zm0 8h20v2H2z"/></svg>',
-            date: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 2c-1.1 0-2 .9-2 2v3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2h-2V4c0-1.1-.9-2-2-2s-2 .9-2 2v3H9V4c0-1.1-.9-2-2-2zm0 6h14v10H7V8z"/></svg>',
-            currency: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>',
-            percentage: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 13h2v8H3zm4-8h2V3H7zm10 0h2V3h-2zM3 3h2v2H3zm10 10h2v8h-2z"/></svg>',
-            boolean: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>'
-        };
-        return iconMap[col.dataType] || iconMap.text;
-    }
-
-    private getSortIconText(colName: string): string {
-        const meta = this.getSortMeta(colName);
-        if (!meta) return "↕";
-        return meta.direction === "asc" ? "↑" : "↓";
-    }
-
     private getSortMeta(colName: string): { direction: "asc" | "desc"; priority: number } | null {
         if (this.sortModel.length > 0) {
             const idx = this.sortModel.findIndex(s => s.columnName === colName);
@@ -4389,39 +3855,7 @@ export class AdvancedModernTable {
 
     private getSortIconSVG(colName: string): string {
         const sortMeta = this.getSortMeta(colName);
-        const isActive = !!sortMeta;
-        const isAsc = sortMeta?.direction === "asc";
-
-        if (!isActive) {
-            return '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M7 14l5-5 5 5H7z"/><path d="M7 10l5 5 5-5H7z"/></svg>';
-        }
-
-        if (isAsc) {
-            return '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M7 14l5-5 5 5z"/></svg>';
-        } else {
-            return '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>';
-        }
-    }
-
-    private getFilterIconText(active: boolean): string {
-        return active ? "⏷" : "⌕";
-    }
-
-    private getFilterIconSVG(active: boolean): string {
-        if (active) {
-            return '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg>';
-        } else {
-            return '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M4.25 5.61C6.27 8.20 10 13 10 13v6c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-6s3.72-4.8 5.75-7.39c.37-.48.37-1.15 0-1.63C19.54 2.75 18.08 2 16.5 2H7.5c-1.58 0-3.04.75-3.25 2.98z"/></svg>';
-        }
-    }
-
-    private setSvgContent(el: HTMLElement, svgHtml: string): void {
-        el.textContent = "";
-        const doc = new DOMParser().parseFromString(svgHtml, "image/svg+xml");
-        const svg = doc.documentElement;
-        if (svg && svg.nodeName !== "parsererror") {
-            el.appendChild(document.importNode(svg, true));
-        }
+        return sortIconSVG(!!sortMeta, sortMeta?.direction === "asc");
     }
 
     private openIconPickerModal(col: IAdvancedColumn): void {
@@ -4496,7 +3930,7 @@ export class AdvancedModernTable {
             item.setAttribute("data-variant", String(index));
             const preview = document.createElement("div");
             preview.className = "mt-icon-picker-preview";
-            this.setSvgContent(preview, variant.svg);
+            setSvgContent(preview, variant.svg);
             const variantLabel = document.createElement("span");
             variantLabel.textContent = variant.label;
             item.appendChild(preview);
@@ -4678,7 +4112,7 @@ export class AdvancedModernTable {
 
             const sortIcon = th.querySelector<HTMLElement>(".mt-sort-icon");
             if (sortIcon) {
-                this.setSvgContent(sortIcon, this.getSortIconSVG(col.name));
+                setSvgContent(sortIcon, this.getSortIconSVG(col.name));
                 sortIcon.classList.toggle("mt-sort-active", !!this.getSortMeta(col.name));
             }
 
@@ -4686,7 +4120,7 @@ export class AdvancedModernTable {
             if (filterBtn) {
                 const hasFilter = this.config.filters.has(col.name);
                 filterBtn.classList.toggle("mt-filter-active", hasFilter);
-                this.setSvgContent(filterBtn, this.getFilterIconSVG(hasFilter));
+                setSvgContent(filterBtn, getFilterIconSVG(hasFilter));
             }
         });
     }

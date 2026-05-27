@@ -401,7 +401,7 @@
 }
 
 .mt-th:hover .mt-colfmt-btn {
-    opacity: 1;
+    opacity: 0.65;
 }
 
 .mt-th-matrix-label .mt-filter-btn,
@@ -505,35 +505,30 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 24px;
+    width: 22px;
     height: 22px;
-    padding: 0 8px;
-    border: 1px solid #d4b106;
-    background: #f8df47;
+    padding: 0;
+    border: none;
+    background: none;
     cursor: pointer;
-    color: #334155;
-    border-radius: 999px;
-    opacity: 0.92;
-    font-size: 14px;
+    color: var(--mt-header-text-override, var(--mt-header-text, #9ca3af));
+    border-radius: var(--mt-radius-sm, 4px);
+    opacity: 0;
+    font-size: 16px;
     font-weight: 700;
-    letter-spacing: 0.02em;
-    text-transform: none;
     line-height: 1;
-    transition: opacity @mt-transition, background @mt-transition, color @mt-transition, transform @mt-transition;
+    transition: opacity @mt-transition, background @mt-transition, color @mt-transition;
 }
 
 .mt-colfmt-btn:hover {
-    background: #f3d22f;
-    color: #1e293b;
     opacity: 1;
-    transform: translateY(-1px);
+    background: color-mix(in srgb, var(--mt-header-text-override, var(--mt-header-text, #ffffff)) 16%, transparent);
 }
 
 .mt-colfmt-btn.mt-colfmt-active {
     opacity: 1;
-    color: #1f2937;
-    background: #facc15;
-    border-color: #ca8a04;
+    color: var(--mt-accent, #3b82f6);
+    background: var(--mt-accent-light, #eff6ff);
 }
 
 .mt-cond-btn {
@@ -953,6 +948,22 @@
     color: var(--mt-summary-text-override, var(--mt-summary-text, #1e40af));
     font-weight: 600;
     border-top: 2px solid var(--mt-border-color, #e5e7eb);
+}
+
+/* Total/summary rows sit on a dark bar. The generic `.mt-td { color }` and the
+   first/last-child background rules would otherwise paint dark text and light
+   patches over it — making the numbers unreadable. Force the summary color and
+   let the row's background show through every cell uniformly. */
+.mt-tr-total .mt-td,
+.mt-tr-matrix-total .mt-td {
+    color: var(--mt-summary-text-override, var(--mt-summary-text, #1e40af));
+    background: transparent !important;
+    border-right-color: color-mix(in srgb, var(--mt-summary-text-override, var(--mt-summary-text, #1e40af)) 20%, transparent);
+}
+
+.mt-tr-subtotal .mt-td {
+    color: var(--mt-subtotal-text-override, var(--mt-subtotal-text, #5b21b6));
+    background: transparent !important;
 }
 
 .mt-tr-selected {
@@ -1982,6 +1993,7 @@
 .mt-th-matrix-total,
 .mt-td-matrix-total {
     background: var(--mt-accent-light, #eff6ff);
+    color: var(--mt-text-2, #374151);
     font-weight: 700;
 }
 
@@ -1993,28 +2005,32 @@
 
 .mt-matrix-menu-trigger {
     margin-left: auto;
-    width: 24px;
-    height: 24px;
-    border: 1px solid rgba(15, 118, 110, 0.25);
-    border-radius: 999px;
-    background: rgba(20, 184, 166, 0.12);
-    color: #0f766e;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: var(--mt-radius-sm, 4px);
+    background: none;
+    color: var(--mt-text-4, #94a3b8);
     cursor: pointer;
     line-height: 1;
     font-weight: 700;
-    transition: all @mt-transition;
+    opacity: 0;
+    transition: opacity @mt-transition, background @mt-transition, color @mt-transition;
+}
+
+/* Header lives on the dark bar — adopt the header text color there. */
+.mt-th .mt-matrix-menu-trigger {
+    color: var(--mt-header-text-override, var(--mt-header-text, #94a3b8));
+}
+
+.mt-th:hover .mt-matrix-menu-trigger,
+.mt-tr:hover .mt-matrix-menu-trigger {
+    opacity: 0.7;
 }
 
 .mt-matrix-menu-trigger:hover {
-    color: var(--mt-accent, #3b82f6);
-    background: var(--mt-accent-light, #eff6ff);
-    border-color: rgba(59, 130, 246, 0.24);
-}
-
-.mt-root.mt-theme-dark .mt-matrix-menu-trigger {
-    border-color: rgba(125, 182, 255, 0.35);
-    background: rgba(14, 165, 233, 0.16);
-    color: #7db6ff;
+    opacity: 1 !important;
+    background: color-mix(in srgb, currentColor 16%, transparent);
 }
 
 .mt-matrix-menu {
