@@ -3,189 +3,36 @@
  * Features: data-type icons · filter panels · on-object editing · column resize
  *           modern pagination with page size · spacing modes · 4 themes
  *           row selection · grouping · conditional formatting
+ *
+ * Tipos públicos vivem em ./types — re-exportados aqui para retrocompatibilidade
+ * de imports existentes (ex.: `import { IAdvancedColumn } from "./advanced-table"`).
  */
 
-export interface IAdvancedColumn {
-    name: string;
-    displayName: string;
-    index: number;
-    width: number;           // percentage (0–100)
-    sortable: boolean;
-    filterable: boolean;
-    visible: boolean;
-    dataType: "text" | "number" | "date" | "boolean" | "currency" | "percentage";
-    alignment: "left" | "center" | "right";
-    format?: string;
-    headerPath?: string[];   // for complex headers (column groups)
-    fontFamily?: string;
-    fontSize?: number;       // px
-    backgroundColor?: string;
-    textColor?: string;
-    bold?: boolean;
-    italic?: boolean;
-    underline?: boolean;
-    strikethrough?: boolean;
-    editable?: boolean;
-    resizable?: boolean;
-    minWidth?: number;       // minimum px when resizing (default: 48)
-    customIcon?: string;     // custom SVG icon for column header
-    dataBar?: boolean;       // render numeric cells as data bars
-    cellStyle?: "text" | "badge" | "progress";
-    badgeShape?: "rectangle" | "oval";
-    badgePalette?: "soft" | "vivid";
-    pinned?: "left" | "right" | null;
-}
-
-type ColumnFormattingOverride = Partial<Pick<
+import {
     IAdvancedColumn,
-    "alignment" | "fontFamily" | "fontSize" | "textColor" | "bold" | "italic" | "underline" | "strikethrough" | "dataBar" | "cellStyle" | "badgeShape" | "badgePalette"
->>;
+    IAdvancedRow,
+    IAdvancedTableConfig,
+    IConditionalFormat,
+    ColumnFormattingOverride,
+    ColumnIconOverride,
+    SortDescriptor,
+    MatrixCalcMode,
+    PerformancePreset,
+    PerformanceOverrides,
+    OnObjectPersistedState,
+    RangeFilter,
+    InFilter,
+    OperatorFilter,
+    PerformanceManagedKey
+} from "./types";
 
-type ColumnIconOverride = {
-    svg?: string;
-    size?: number;
-    color?: string;
-    backgroundColor?: string;
-    // quando definido, permite ligar/desligar ícone só para esta coluna
-    visible?: boolean;
+// Re-exports para manter compatibilidade com qualquer import legado.
+export type {
+    IAdvancedColumn,
+    IAdvancedRow,
+    IAdvancedTableConfig,
+    IConditionalFormat
 };
-
-type RangeFilter = { min?: number | null; max?: number | null };
-type InFilter = { in: string[] };
-type OperatorFilter = {
-    op: "contains" | "equals" | "notEquals" | "startsWith" | "endsWith";
-    value: string;
-};
-type SortDescriptor = { columnName: string; direction: "asc" | "desc" };
-
-export interface IAdvancedRow {
-    id: string | number;
-    values: any[];
-    isCalculated?: boolean;
-    isSubtotal?: boolean;
-    isSummary?: boolean;
-    calculationType?: "sum" | "average" | "count" | "min" | "max" | "subtotal";
-    rowType?: "data" | "group" | "subtotal" | "total";
-    backgroundColor?: string;
-    textColor?: string;
-    borderTop?: string;
-    borderBottom?: string;
-    bold?: boolean;
-    groupLabel?: string;
-    groupLevel?: number;
-    isExpanded?: boolean;
-    groupKey?: string;
-    groupColumnIndex?: number;
-    identity?: any;
-}
-
-export interface IConditionalFormat {
-    columnName: string;
-    condition: "equals" | "notEquals" | "greaterThan" | "lessThan" | "between" | "contains";
-    value: any;
-    value2?: any;
-    backgroundColor: string;
-    textColor: string;
-    bold?: boolean;
-    backgroundShape?: "rectangle" | "oval";
-    iconVariant?: string;
-}
-
-type MatrixCalcMode = "sum" | "average" | "count" | "min" | "max";
-type PerformanceManagedKey =
-    | "spacingMode"
-    | "rowHeight"
-    | "headerHeight"
-    | "fontSize"
-    | "showHeaderFilter"
-    | "showQuickFilter"
-    | "showColumnIcons"
-    | "enablePagination"
-    | "borderless"
-    | "striped"
-    | "enableConditionalFormatting"
-    | "enableAnalyticsCellVisuals";
-type PerformancePreset = "default" | "performance" | "balanced" | "presentation" | "custom";
-type PerformanceOverrides = Partial<Pick<IAdvancedTableConfig, PerformanceManagedKey>>;
-
-type OnObjectPersistedState = {
-    version: 1;
-    columnFormattingOverrides?: Record<string, ColumnFormattingOverride>;
-    columnDisplayNameOverrides?: Record<string, string>;
-    conditionalFormats?: IConditionalFormat[];
-    columnIconOverrides?: Record<string, ColumnIconOverride>;
-    columnPinOverrides?: Record<string, "left" | "right" | null>;
-};
-
-export interface IAdvancedTableConfig {
-    // Matrix configuration (pivot table)
-    // Pagination
-    pageSize: number;
-    currentPage: number;
-    enablePagination: boolean;
-    pageSizeOptions: number[];
-
-    // Sorting
-    sortColumn: string | null;
-    sortDirection: "asc" | "desc";
-
-    // Filtering — value can be a string (text) or {min, max} (range)
-    filters: Map<string, any>;
-    showHeaderFilter: boolean;
-    showQuickFilter: boolean;
-
-    // Grouping
-    enableGrouping: boolean;
-    groupByColumnName?: string | null;
-
-    // Calculated rows
-    enableCalculatedRows: boolean;
-    autoSummaryRows: Array<{ type: "sum" | "average" | "count" | "min" | "max"; label?: string }>;
-
-    // Conditional formatting
-    enableConditionalFormatting: boolean;
-
-    // Layout
-    rowHeight: number;
-    headerHeight: number;
-    tableWidthPx: number;
-    tableHeightPx: number;
-    spacingMode: "compact" | "comfortable" | "spacious";
-
-    // Appearance
-    theme: "light" | "dark" | "minimal";
-    borderColor: string;
-    headerBackgroundColor: string;
-    headerTextColor: string;
-    rowAlternateColor: string;
-    rowAlternateColor2: string;
-    hoverColor: string;
-    accentColor: string;
-    summaryRowBackgroundColor: string;
-    summaryRowTextColor: string;
-    summaryRowBold: boolean;
-    subtotalRowBackgroundColor: string;
-    subtotalRowTextColor: string;
-    groupRowBackgroundColor: string;
-    groupRowTextColor: string;
-    selectedGroupBackgroundColor: string;
-    groupedRowsBold: boolean;
-    striped: boolean;
-    borderless: boolean;
-    compact: boolean;
-    fontSize: number;
-
-    // Features
-    showColumnIcons: boolean;
-    iconPreset: "minimal" | "emoji" | "technical";
-    customColumnIcons: Record<string, string>;
-    enableColumnResize: boolean;
-    iconColor: string;
-    iconBackgroundColor: string;
-    showRowNumbers: boolean;
-    enableRowSelection: boolean;
-    enableAnalyticsCellVisuals: boolean;
-}
 
 export class AdvancedModernTable {
     private container: HTMLElement;
@@ -221,7 +68,7 @@ export class AdvancedModernTable {
     private dataBarStats: Map<string, { min: number; max: number }> = new Map();
     private sortModel: SortDescriptor[] = [];
     private quickFilterText: string = "";
-    private performancePanelOpen: boolean = false;
+    private rowSelectionIds: Map<string | number, any> = new Map();
     private toolbarCollapsed: boolean = false;
     private performancePreset: PerformancePreset = "default";
     private performanceOverrides: PerformanceOverrides = {};
@@ -329,7 +176,6 @@ export class AdvancedModernTable {
                 this.closeConditionalPanel();
                 this.closeColumnFormatPanel();
                 this.closeMatrixMenu();
-                this.setPerformancePanelOpen(false);
             }
         };
         document.addEventListener("mousedown", this.outsideClickHandler);
@@ -369,148 +215,17 @@ export class AdvancedModernTable {
             const iconOverride = this.columnIconOverrides.get(col.name);
             const pinned = this.columnPinOverrides.get(col.name) ?? col.pinned ?? null;
             const customIcon = iconOverride?.svg ?? col.customIcon;
-            return { ...col, ...override, customIcon, pinned, displayName, index: idx };
+            return { ...col, ...override, customIcon, pinned, displayName, index: idx, visible: true };
         });
     }
 
-    private getRenderableColumns(): IAdvancedColumn[] {
-        const visible = this.columns.filter(c => c.visible);
-        const left = visible.filter(c => c.pinned === "left");
-        const center = visible.filter(c => c.pinned !== "left" && c.pinned !== "right");
-        const right = visible.filter(c => c.pinned === "right");
-        return [...left, ...center, ...right];
-    }
-
-    private recomputeAutoColumnWidths(): void {
-        const cols = this.getRenderableColumns();
-        if (!cols.length) {
-            this.autoColumnWidthsPx.clear();
-            return;
-        }
-
-        const sampleRows = this.rows.slice(0, Math.min(this.rows.length, 120));
-        const chromeWidth = (this.config.showRowNumbers ? 44 : 0) + (this.config.enableRowSelection ? 44 : 0) + 16;
-        const containerWidth = Math.max(320, this.container.clientWidth || 920);
-        const availableWidth = Math.max(220, containerWidth - chromeWidth);
-
-        const minByCol = new Map<string, number>();
-        const widths = new Map<string, number>();
-
-        cols.forEach((col) => {
-            const minWidth = Math.max(72, col.minWidth ?? 96);
-            const maxWidth = Math.max(220, Math.floor(availableWidth * 0.42));
-
-            let maxChars = String(col.displayName || col.name || "").length;
-            sampleRows.forEach((row) => {
-                const raw = row.values[col.index];
-                const txt = this.formatCellValue(raw, col);
-                maxChars = Math.max(maxChars, String(txt || "").length);
-            });
-
-            // ~7px per glyph + room for paddings, icons and sort/filter affordances.
-            const estimated = Math.ceil((maxChars * 7) + 48);
-            const normalized = Math.max(minWidth, Math.min(maxWidth, estimated));
-
-            minByCol.set(col.name, minWidth);
-            widths.set(col.name, normalized);
-        });
-
-        const total = Array.from(widths.values()).reduce((acc, w) => acc + w, 0);
-        if (total > availableWidth && cols.length > 1) {
-            const scale = availableWidth / total;
-            cols.forEach((col) => {
-                const current = widths.get(col.name) || 0;
-                const minW = minByCol.get(col.name) || 72;
-                const scaled = Math.max(minW, Math.floor(current * scale));
-                widths.set(col.name, scaled);
-            });
-        }
-
-        // Keep the grid aligned with container width: the last visible column
-        // absorbs any remaining horizontal space.
-        this.autoColumnWidthsPx = widths;
-    }
-
-    private getEffectiveShowColumnIcons(colName: string): boolean {
-        const override = this.columnIconOverrides.get(colName);
-        if (override && typeof override.visible === "boolean") {
-            return override.visible;
-        }
-        return this.config.showColumnIcons;
-    }
-
-    private rowSelectionIds: Map<string | number, any> = new Map();
-
-    public setData(rows: IAdvancedRow[]): void {
-        this.allRows = rows.filter(r => !r.isCalculated);
-
-        // Build SelectionId map for rows when host supports builder and row identity is present
-        this.rowSelectionIds.clear();
-        try {
-            const builderFactory = this.host?.createSelectionIdBuilder?.bind(this.host);
-            if (builderFactory) {
-                this.allRows.forEach((r, idx) => {
-                    try {
-                        const builder = this.host.createSelectionIdBuilder();
-                        let selId: any = undefined;
-                        if (r.identity) {
-                            if (typeof builder.withSelector === "function") {
-                                selId = builder.withSelector(r.identity).createSelectionId();
-                            } else if (typeof builder.withCategory === "function") {
-                                selId = builder.withCategory(r.identity, idx).createSelectionId();
-                            } else {
-                                selId = builder.createSelectionId();
-                            }
-                        } else {
-                            selId = builder.createSelectionId();
-                        }
-                        this.rowSelectionIds.set(r.id, selId);
-                    } catch {
-                        // ignore selection id creation errors
-                    }
-                });
-            }
-        } catch {
-            // ignore
-        }
-
-        this.applyFilters();
-        this.applySorting();
-    }
-
-    public updateConfig(newConfig: Partial<IAdvancedTableConfig>): void {
-        const preservedFilters = newConfig.filters ?? this.config.filters;
-        this.config = { ...this.config, ...newConfig, filters: preservedFilters };
-
-        if (Object.keys(this.performanceOverrides).length > 0) {
-            this.config = { ...this.config, ...this.performanceOverrides };
-        }
-
-        if (!this.config.enablePagination) {
-            this.config.currentPage = 1;
-        } else {
-            const totalPages = this.getTotalPages();
-            if (this.config.currentPage > totalPages) {
-                this.config.currentPage = totalPages;
-            }
-        }
-
-        // Apply pixel quality adjustments based on new config dimensions
-        this.applyPixelQualityAdjustments(this.config.tableWidthPx);
-    }
-
-    public loadOnObjectState(serialized?: string): void {
-        if (!serialized) {
-            this.columnFormattingOverrides.clear();
-            this.columnDisplayNameOverrides.clear();
-            this.conditionalFormats = [];
-            this.columnIconOverrides.clear();
-            this.columnPinOverrides.clear();
-            return;
-        }
+    public loadOnObjectState(state?: string): void {
+        if (!state) return;
 
         try {
-            const parsed = JSON.parse(serialized) as OnObjectPersistedState;
+            const parsed = JSON.parse(state) as OnObjectPersistedState;
+            if (parsed.version !== 1) return;
+
             this.columnFormattingOverrides = new Map<string, ColumnFormattingOverride>(
                 Object.entries(parsed.columnFormattingOverrides || {})
             );
@@ -614,6 +329,62 @@ export class AdvancedModernTable {
         this.config.currentPage = 1;
         this.applyFilters();
         this.applySorting();
+    }
+
+    public updateConfig(config: Partial<IAdvancedTableConfig>): void {
+        this.config = { ...this.config, ...config };
+        this.config.currentPage = Math.max(1, this.config.currentPage || 1);
+    }
+
+    public setData(rows: IAdvancedRow[]): void {
+        this.allRows = Array.isArray(rows) ? [...rows] : [];
+        this.rowSelectionIds.clear();
+        this.selectedRows.clear();
+        this.applyFilters();
+        this.applySorting();
+    }
+
+    private getRenderableColumns(): IAdvancedColumn[] {
+        const visible = this.columns.filter(c => c.visible !== false);
+        const left = visible.filter(c => c.pinned === "left");
+        const center = visible.filter(c => c.pinned !== "left" && c.pinned !== "right");
+        const right = visible.filter(c => c.pinned === "right");
+        return [...left, ...center, ...right];
+    }
+
+    private recomputeAutoColumnWidths(): void {
+        const cols = this.getRenderableColumns();
+        if (!cols.length) {
+            this.autoColumnWidthsPx.clear();
+            return;
+        }
+
+        const sampleRows = this.rows.slice(0, Math.min(this.rows.length, 120));
+        const chromeWidth = (this.config.showRowNumbers ? 44 : 0) + (this.config.enableRowSelection ? 44 : 0) + 16;
+        const containerWidth = Math.max(320, this.container.clientWidth || 920);
+        const availableWidth = Math.max(220, containerWidth - chromeWidth);
+
+        this.autoColumnWidthsPx.clear();
+        cols.forEach((col) => {
+            const minWidth = Math.max(72, col.minWidth ?? 96);
+            const maxWidth = Math.max(220, Math.floor(availableWidth * 0.42));
+
+            let maxChars = String(col.displayName || col.name || "").length;
+            sampleRows.forEach((row) => {
+                const raw = row.values[col.index];
+                const txt = this.formatCellValue(raw, col);
+                maxChars = Math.max(maxChars, String(txt || "").length);
+            });
+
+            const estimated = Math.ceil((maxChars * 7) + 48);
+            const normalized = Math.max(minWidth, Math.min(maxWidth, estimated));
+            this.autoColumnWidthsPx.set(col.name, normalized);
+        });
+    }
+
+    private getEffectiveShowColumnIcons(colName: string): boolean {
+        if (!this.config.showColumnIcons) return false;
+        return this.columnIconOverrides.get(colName)?.visible !== false;
     }
 
     public exportVisibleToCsv(fileName: string = "modern-table.csv"): void {
@@ -1062,8 +833,11 @@ export class AdvancedModernTable {
             }
             return type === "count" ? dataRows.length : null;
         });
+        const summaryId = typeof window !== "undefined" && window.crypto?.randomUUID
+            ? window.crypto.randomUUID()
+            : `summary_${Date.now()}`;
         return {
-            id: `auto_${type}_${Date.now()}_${Math.random()}`,
+            id: `auto_${type}_${summaryId}`,
             values,
             isCalculated: true,
             isSummary: true,
@@ -1305,163 +1079,6 @@ export class AdvancedModernTable {
         // Performance mode switcher removed for cleaner UI
     }
 
-    private renderPerformanceModeSwitcher(): void {
-        const switcher = document.createElement("div");
-        switcher.className = "mt-mode-switcher";
-
-        const trigger = document.createElement("button");
-        trigger.type = "button";
-        trigger.className = "mt-mode-trigger";
-        trigger.title = "Performance: editar tabela inteira";
-        trigger.setAttribute("aria-label", "Performance: editar tabela inteira");
-        const triggerIcon = document.createElement("span");
-        triggerIcon.className = "mt-mode-trigger-icon";
-        triggerIcon.setAttribute("aria-hidden", "true");
-        triggerIcon.textContent = "⚡";
-        trigger.appendChild(triggerIcon);
-        trigger.addEventListener("click", (e) => {
-            e.stopPropagation();
-            this.setPerformancePanelOpen(!this.performancePanelOpen);
-        });
-
-        const menu = document.createElement("div");
-        menu.className = "mt-mode-menu";
-
-        const presets: Array<{ preset: Exclude<PerformancePreset, "custom">; title: string; hint: string }> = [
-            { preset: "performance", title: "Performance", hint: "Mais velocidade, menos carga visual" },
-            { preset: "balanced", title: "Balanceado", hint: "Equilibrio entre leitura e performance" },
-            { preset: "presentation", title: "Apresentacao", hint: "Visual mais completo para demonstracao" }
-        ];
-
-        presets.forEach((item) => {
-            const option = document.createElement("button");
-            option.type = "button";
-            option.className = "mt-mode-option";
-            if (this.performancePreset === item.preset) {
-                option.classList.add("mt-mode-option-active");
-            }
-
-            const title = document.createElement("span");
-            title.className = "mt-mode-option-title";
-            title.textContent = item.title;
-
-            const hint = document.createElement("span");
-            hint.className = "mt-mode-option-hint";
-            hint.textContent = item.hint;
-
-            option.appendChild(title);
-            option.appendChild(hint);
-            option.addEventListener("click", (e) => {
-                e.stopPropagation();
-                this.applyPerformancePreset(item.preset);
-            });
-            menu.appendChild(option);
-        });
-
-        const divider = document.createElement("div");
-        divider.className = "mt-mode-divider";
-        menu.appendChild(divider);
-
-        menu.appendChild(this.createPerformanceToggleRow(
-            "Filtros no cabecalho",
-            this.config.showHeaderFilter,
-            (checked) => this.setPerformanceOverride("showHeaderFilter", checked)
-        ));
-        menu.appendChild(this.createPerformanceToggleRow(
-            "Icones das colunas",
-            this.config.showColumnIcons,
-            (checked) => this.setPerformanceOverride("showColumnIcons", checked)
-        ));
-        menu.appendChild(this.createPerformanceToggleRow(
-            "Virtualizacao (desliga paginacao)",
-            !this.config.enablePagination,
-            (checked) => this.setPerformanceOverride("enablePagination", !checked)
-        ));
-        menu.appendChild(this.createPerformanceToggleRow(
-            "Formatacao condicional",
-            this.config.enableConditionalFormatting,
-            (checked) => this.setPerformanceOverride("enableConditionalFormatting", checked)
-        ));
-
-        const disableFiltersBtn = document.createElement("button");
-        disableFiltersBtn.type = "button";
-        disableFiltersBtn.className = "mt-mode-option mt-mode-option-inline";
-        disableFiltersBtn.textContent = "Desativar todos os filtros";
-        disableFiltersBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            this.disableAllFilters();
-        });
-        menu.appendChild(disableFiltersBtn);
-
-        const compactBtn = document.createElement("button");
-        compactBtn.type = "button";
-        compactBtn.className = "mt-mode-option mt-mode-option-inline";
-        compactBtn.textContent = this.config.spacingMode === "compact" ? "Espacamento: Compacto" : "Usar espacamento compacto";
-        compactBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            const useCompact = this.config.spacingMode !== "compact";
-            this.setPerformanceOverrides(
-                {
-                    spacingMode: useCompact ? "compact" : "comfortable",
-                    rowHeight: useCompact ? 30 : 40,
-                    headerHeight: useCompact ? 34 : 44,
-                    fontSize: useCompact ? 12 : 13
-                },
-                "custom"
-            );
-        });
-        menu.appendChild(compactBtn);
-
-        const resetBtn = document.createElement("button");
-        resetBtn.type = "button";
-        resetBtn.className = "mt-mode-reset";
-        resetBtn.textContent = "Resetar ajustes de performance";
-        resetBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            this.clearPerformanceOverrides();
-        });
-        menu.appendChild(resetBtn);
-
-        switcher.appendChild(trigger);
-        switcher.appendChild(menu);
-        this.container.appendChild(switcher);
-        this.syncPerformancePanelState();
-    }
-
-    private createPerformanceToggleRow(
-        label: string,
-        checked: boolean,
-        onChange: (checked: boolean) => void
-    ): HTMLElement {
-        const row = document.createElement("label");
-        row.className = "mt-mode-toggle-row";
-
-        const input = document.createElement("input");
-        input.type = "checkbox";
-        input.className = "mt-mode-toggle";
-        input.checked = checked;
-        input.addEventListener("change", () => onChange(input.checked));
-
-        const text = document.createElement("span");
-        text.className = "mt-mode-toggle-label";
-        text.textContent = label;
-
-        row.appendChild(input);
-        row.appendChild(text);
-        return row;
-    }
-
-    private syncPerformancePanelState(): void {
-        const switcher = this.container.querySelector<HTMLElement>(".mt-mode-switcher");
-        if (!switcher) return;
-        switcher.classList.toggle("mt-mode-open", this.performancePanelOpen);
-    }
-
-    private setPerformancePanelOpen(open: boolean): void {
-        this.performancePanelOpen = open;
-        this.syncPerformancePanelState();
-    }
-
     private capturePerformanceBaseConfig(): void {
         if (Object.keys(this.performanceBaseConfig).length > 0) return;
         this.performanceBaseConfig = {
@@ -1480,68 +1097,6 @@ export class AdvancedModernTable {
         };
     }
 
-    private getPerformancePresetOverrides(preset: Exclude<PerformancePreset, "custom">): PerformanceOverrides {
-        switch (preset) {
-            case "performance":
-                return {
-                    spacingMode: "compact",
-                    rowHeight: 30,
-                    headerHeight: 34,
-                    fontSize: 12,
-                    showHeaderFilter: false,
-                    showColumnIcons: false,
-                    enablePagination: false,
-                    borderless: true,
-                    striped: false,
-                    enableConditionalFormatting: false,
-                    enableAnalyticsCellVisuals: false
-                };
-            case "balanced":
-                return {
-                    spacingMode: "comfortable",
-                    rowHeight: 38,
-                    headerHeight: 42,
-                    fontSize: 13,
-                    showHeaderFilter: true,
-                    showColumnIcons: true,
-                    enablePagination: true,
-                    borderless: false,
-                    striped: true,
-                    enableConditionalFormatting: true,
-                    enableAnalyticsCellVisuals: true
-                };
-            case "presentation":
-                return {
-                    spacingMode: "spacious",
-                    rowHeight: 48,
-                    headerHeight: 54,
-                    fontSize: 14,
-                    showHeaderFilter: false,
-                    showColumnIcons: true,
-                    enablePagination: true,
-                    borderless: false,
-                    striped: true,
-                    enableConditionalFormatting: true,
-                    enableAnalyticsCellVisuals: true
-                };
-            case "default":
-            default:
-                return {};
-        }
-    }
-
-    private applyPerformancePreset(preset: Exclude<PerformancePreset, "custom">): void {
-        this.capturePerformanceBaseConfig();
-        this.performancePreset = preset;
-        this.performanceOverrides = this.getPerformancePresetOverrides(preset);
-        this.config = { ...this.config, ...this.performanceOverrides };
-        this.performancePanelOpen = true;
-        this.config.currentPage = 1;
-        this.applyFilters();
-        this.applySorting();
-        this.render();
-    }
-
     private setPerformanceOverride<K extends PerformanceManagedKey>(key: K, value: IAdvancedTableConfig[K]): void {
         this.setPerformanceOverrides({ [key]: value } as PerformanceOverrides, "custom");
     }
@@ -1551,44 +1106,6 @@ export class AdvancedModernTable {
         this.performancePreset = preset;
         this.performanceOverrides = { ...this.performanceOverrides, ...overrides };
         this.config = { ...this.config, ...this.performanceOverrides };
-        this.performancePanelOpen = true;
-        this.config.currentPage = 1;
-        this.applyFilters();
-        this.applySorting();
-        this.render();
-    }
-
-    private disableAllFilters(): void {
-        this.capturePerformanceBaseConfig();
-        this.performancePreset = "custom";
-        this.performanceOverrides = {
-            ...this.performanceOverrides,
-            showHeaderFilter: false,
-            showQuickFilter: false
-        };
-        this.config.filters.clear();
-        this.quickFilterText = "";
-        this.config = {
-            ...this.config,
-            ...this.performanceOverrides,
-            showHeaderFilter: false,
-            showQuickFilter: false
-        };
-        this.config.currentPage = 1;
-        this.applyFilters();
-        this.applySorting();
-        this.render();
-    }
-
-    private clearPerformanceOverrides(): void {
-        const base = this.performanceBaseConfig;
-        this.performanceOverrides = {};
-        this.performancePreset = "default";
-        this.performanceBaseConfig = {};
-        if (Object.keys(base).length > 0) {
-            this.config = { ...this.config, ...base };
-        }
-        this.performancePanelOpen = true;
         this.config.currentPage = 1;
         this.applyFilters();
         this.applySorting();
@@ -2249,72 +1766,48 @@ export class AdvancedModernTable {
         this.applyPixelQualityAdjustments(width);
     }
 
-    private applyPixelQualityAdjustments(width: number): void {
-        if (width <= 0) return;
+    private applyPixelQualityAdjustments(_width: number): void {
+        // NOTE: This function previously applied `transform: scale(1.1)`/`scale(1.25)`
+        // to "improve clarity" for small tables. CSS `transform: scale()` on DOM
+        // content rasterizes the element at its natural size and then scales the
+        // resulting bitmap — which is exactly what makes text look blurry/pixelated
+        // and also pushed content outside the visual viewport, so the table only
+        // became visible at smaller spacing modes (e.g. "compacto"). Real HD
+        // rendering means letting the browser lay out and paint at the actual
+        // pixel size, with no scale transform.
+        //
+        // We also drop a handful of "optimization" properties that were actively
+        // harmful here:
+        //   - text-rendering: geometricPrecision  → blurs small text in many browsers
+        //   - shape-rendering: crispEdges         → SVG-only, no effect on DOM text
+        //   - image-rendering: crisp-edges        → for raster images, makes icons jagged
+        //   - --mt-font-size override             → was tied to the (now removed) scale logic
+        //
+        // The base font size is already driven by `--mt-font-size` set from
+        // `this.config.fontSize` in applyConfigStyles, so removing the override
+        // here makes the table honor the real configured size.
 
-        // Define quality breakpoints with more aggressive scaling
-        const SMALL_TABLE_THRESHOLD = 400;
-        const TINY_TABLE_THRESHOLD = 250;
+        const s = this.container.style;
 
-        let pixelScale = 1;
-        let fontSizeAdjustment = 0;
+        // Clear any leftover scale/transform that earlier versions may have applied.
+        s.removeProperty("transform");
+        s.removeProperty("-webkit-transform");
+        s.removeProperty("transform-origin");
+        s.removeProperty("shape-rendering");
+        s.removeProperty("image-rendering");
+        s.removeProperty("will-change");
+        // Let `--mt-font-size` fall back to the value set in applyConfigStyles.
+        s.removeProperty("--mt-font-size");
 
-        if (width < TINY_TABLE_THRESHOLD) {
-            // For very small tables, use 1.25x scale for maximum clarity
-            pixelScale = 1.25;
-            fontSizeAdjustment = 1.5;
-        } else if (width < SMALL_TABLE_THRESHOLD) {
-            // For small tables, use 1.1x scale
-            pixelScale = 1.1;
-            fontSizeAdjustment = 0.75;
-        }
+        // Standard, browser-trusted text-quality hints. These are safe at any
+        // size and any DPR, and do NOT involve scaling the rendered bitmap.
+        s.setProperty("-webkit-font-smoothing", "antialiased");
+        s.setProperty("-moz-osx-font-smoothing", "grayscale");
+        s.setProperty("text-rendering", "optimizeLegibility");
 
-        // Apply transform scale for crisp rendering
-        if (pixelScale > 1) {
-            this.container.style.transformOrigin = "top left";
-            this.container.style.transform = `scale(${pixelScale})`;
-            this.container.style.setProperty("--webkit-transform", `scale(${pixelScale})`);
-        } else {
-            this.container.style.removeProperty("transform");
-        }
-
-        // Adjust font size for better clarity
-        if (fontSizeAdjustment > 0) {
-            const adjustedFontSize = Math.max(11, this.config.fontSize + fontSizeAdjustment);
-            this.container.style.setProperty("--mt-font-size", `${adjustedFontSize}px`);
-        }
-
-        // High DPI detection and optimization
-        const dpr = window.devicePixelRatio || 1;
-        
-        // MAXIMUM quality rendering properties — apply all available optimization techniques
-        this.container.style.setProperty("-webkit-font-smoothing", "subpixel-antialiased");
-        this.container.style.setProperty("-moz-osx-font-smoothing", "grayscale");
-        this.container.style.setProperty("text-rendering", dpr > 1.5 ? "optimizeLegibility" : "geometricPrecision");
-        this.container.style.setProperty("shape-rendering", "crispEdges");
-        this.container.style.setProperty("image-rendering", "-webkit-optimize-contrast");
-        this.container.style.setProperty("image-rendering", "crisp-edges");
-        this.container.style.setProperty("will-change", "transform");
-        this.container.style.setProperty("backface-visibility", "hidden");
-        this.container.style.setProperty("-webkit-backface-visibility", "hidden");
-        
-        // GPU acceleration with 3D transform
-        if (pixelScale > 1) {
-            this.container.style.setProperty("transform", `scale(${pixelScale}) translateZ(0)`);
-        } else {
-            this.container.style.setProperty("transform", "translateZ(0)");
-        }
-        this.container.style.setProperty("-webkit-transform", "translate3d(0, 0, 0)");
-        
-        // Force GPU acceleration for all children with maximum quality
-        const allElements = this.container.querySelectorAll("*");
-        allElements.forEach((el: any) => {
-            el.style.setProperty("-webkit-font-smoothing", "subpixel-antialiased");
-            el.style.setProperty("backface-visibility", "hidden");
-            el.style.setProperty("-webkit-backface-visibility", "hidden");
-            el.style.setProperty("will-change", "transform");
-            el.style.setProperty("transform", "translateZ(0)");
-        });
+        // Keep cheap GPU compositing (no scaling) for smooth scroll/pan.
+        s.setProperty("backface-visibility", "hidden");
+        s.setProperty("-webkit-backface-visibility", "hidden");
     }
 
     // ─── Header ───────────────────────────────────────────────────────────────
@@ -3844,8 +3337,8 @@ export class AdvancedModernTable {
         }
 
         menu.appendChild(sep());
-        menu.appendChild(makeItem("◌", "Ocultar coluna", () => {
-            this.columns = this.columns.map(c => c.name === col.name ? { ...c, visible: false } : c);
+        menu.appendChild(makeItem("◌", "Manter visível", () => {
+            this.columns = this.columns.map(c => c.name === col.name ? { ...c, visible: true } : c);
             this.emitOnObjectStateChanged();
             this.render();
         }, true));
@@ -3939,11 +3432,12 @@ export class AdvancedModernTable {
     // ─── Pagination ───────────────────────────────────────────────────────────
 
     private renderPagination(): void {
-        if (!this.config.enablePagination) {
+        const renderSummaries = this.config.autoSummaryRows.length > 0;
+        if (!this.config.enablePagination && !renderSummaries) {
             return;
         }
 
-        const totalRows = this.getTotalRows();
+        const totalRows = this.getDisplayRows().length;
         const totalPages = this.getTotalPages();
         const currentPage = this.config.currentPage;
 
@@ -4026,7 +3520,7 @@ export class AdvancedModernTable {
         goGroup.appendChild(goBtn);
         right.appendChild(goGroup);
 
-        if (totalPages > 1) {
+        if (this.config.enablePagination && totalPages > 1) {
             right.appendChild(this.makePagBtn("«", currentPage === 1, () => { this.goToPage(1); this.render(); }));
             right.appendChild(this.makePagBtn("‹", currentPage === 1, () => { this.goToPage(currentPage - 1); this.render(); }));
 
@@ -4048,8 +3542,66 @@ export class AdvancedModernTable {
         }
 
         pag.appendChild(left);
-        pag.appendChild(right);
+        if (this.config.enablePagination) {
+            pag.appendChild(right);
+        }
+
+        if (renderSummaries) {
+            const summarySection = document.createElement("div");
+            summarySection.className = "mt-pagination-summary";
+
+            const rows = this.getDisplayRows().filter(r => !r.isCalculated && !r.isSummary && !r.isSubtotal);
+            const pageStart = (currentPage - 1) * this.config.pageSize;
+            const pageRows = rows.slice(pageStart, pageStart + this.config.pageSize);
+
+            this.config.autoSummaryRows.forEach(({ type, label }) => {
+                const pageSummary = this.buildSummaryRow(type, label ? `${label} (página)` : "Total (página)", pageRows);
+                if (pageSummary) {
+                    summarySection.appendChild(this.renderSummaryFooterRow(pageSummary, "mt-pagination-summary-row-page"));
+                }
+
+                if (this.config.enablePagination && currentPage === totalPages) {
+                    const grandSummary = this.buildSummaryRow(type, label ? `${label} (geral)` : "Total (geral)", rows);
+                    if (grandSummary) {
+                        summarySection.appendChild(this.renderSummaryFooterRow(grandSummary, "mt-pagination-summary-row-grand"));
+                    }
+                }
+            });
+
+            pag.appendChild(summarySection);
+        }
+
         this.container.appendChild(pag);
+    }
+
+    private renderSummaryFooterRow(summaryRow: IAdvancedRow, rowClass: string): HTMLDivElement {
+        const row = document.createElement("div");
+        row.className = `mt-tr ${rowClass} mt-tr-total`;
+        row.setAttribute("role", "row");
+
+        if (this.config.showRowNumbers) {
+            const rn = document.createElement("div");
+            rn.className = "mt-td mt-td-rn mt-summary-empty";
+            row.appendChild(rn);
+        }
+
+        if (this.config.enableRowSelection) {
+            const sel = document.createElement("div");
+            sel.className = "mt-td mt-td-select mt-summary-empty";
+            row.appendChild(sel);
+        }
+
+        this.getRenderableColumns().forEach((col, idx) => {
+            const cell = document.createElement("div");
+            cell.className = idx === 0 ? "mt-td mt-summary-label" : "mt-td mt-summary-value";
+            cell.setAttribute("data-col", col.name);
+            this.applyColWidth(cell, col);
+            const raw = summaryRow.values[col.index];
+            cell.textContent = idx === 0 ? String(raw ?? "Total") : this.formatCellValue(raw, col);
+            row.appendChild(cell);
+        });
+
+        return row;
     }
 
     private makePagBtn(text: string, disabled: boolean, onClick: () => void): HTMLButtonElement {

@@ -1,4 +1,7 @@
 {
+    "files": [
+        "./src/visual.ts"
+    ],
     "compilerOptions": {
         "allowJs": false,
         "emitDecoratorMetadata": true,
@@ -16,8 +19,8 @@
             "dom"
         ]
     },
-    "files": [
-        "./src/visual.ts",
-        "./src/declarations.d.ts"
+    "include": [
+        "src/**/*.ts",
+        "src/**/*.d.ts"
     ]
 }

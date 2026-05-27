@@ -65,6 +65,12 @@
                 "columnIconMap": {
                     "type": { "text": true }
                 },
+                "iconColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "iconBackgroundColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
                 "enableColumnResize": {
                     "type": { "bool": true }
                 }
@@ -87,6 +93,9 @@
                 "showHeaderFilter": {
                     "type": { "bool": true }
                 },
+                "showQuickFilter": {
+                    "type": { "bool": true }
+                },
                 "onObjectState": {
                     "type": { "text": true }
                 },
@@ -97,6 +106,9 @@
                     "type": { "bool": true }
                 },
                 "enableAnalyticsCellVisuals": {
+                    "type": { "bool": true }
+                },
+                "enableConditionalFormatting": {
                     "type": { "bool": true }
                 }
             }

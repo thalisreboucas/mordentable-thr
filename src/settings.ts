@@ -203,6 +203,12 @@ class TableFeaturesCard extends FormattingSettingsCard {
         value: false
     });
 
+    enableConditionalFormatting = new formattingSettings.ToggleSwitch({
+        name: "enableConditionalFormatting",
+        displayName: "Formatação condicional",
+        value: true
+    });
+
     name: string = "tableFeatures";
     displayName: string = "⚙️ Recursos & Interação";
     slices: Array<FormattingSettingsSlice> = [
@@ -214,7 +220,8 @@ class TableFeaturesCard extends FormattingSettingsCard {
         this.showQuickFilter,
         this.showRowNumbers,
         this.enableRowSelection,
-        this.enableAnalyticsCellVisuals
+        this.enableAnalyticsCellVisuals,
+        this.enableConditionalFormatting
     ];
 }
 
@@ -417,26 +424,6 @@ class LayoutCard extends FormattingSettingsCard {
     ];
 }
 
-// ─── Data Colors (padrão Power BI) ────────────────────────────────────────
-
-class DataPointCardSettings extends FormattingSettingsCard {
-    defaultColor = new formattingSettings.ColorPicker({
-        name: "defaultColor",
-        displayName: "Cor padrão",
-        value: { value: "" }
-    });
-
-    fontSize = new formattingSettings.NumUpDown({
-        name: "fontSize",
-        displayName: "Tamanho do texto",
-        value: 13
-    });
-
-    name: string = "dataPoint";
-    displayName: string = "📊 Cores dos Dados";
-    slices: Array<FormattingSettingsSlice> = [this.defaultColor, this.fontSize];
-}
-
 // ─── Model ─────────────────────────────────────────────────────────────────
 
 export class VisualFormattingSettingsModel extends FormattingSettingsModel {
@@ -448,7 +435,6 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
     colorsAndBordersCard = new ColorsAndBordersCard();
     groupingStyleCard = new GroupingStyleCard();
     totalsStyleCard = new TotalsStyleCard();
-    dataPointCard = new DataPointCardSettings();
 
     cards = [
         this.tableAppearanceBasicsCard,
@@ -458,7 +444,6 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
         this.layoutCard,
         this.colorsAndBordersCard,
         this.groupingStyleCard,
-        this.totalsStyleCard,
-        this.dataPointCard
+        this.totalsStyleCard
     ];
 }

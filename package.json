@@ -1,22 +1,39 @@
 {
-  "name": "visual",
-  "description": "default_template_value",
+  "name": "mordentable",
+  "description": "Tabela moderna para Power BI com paginação, filtros, ordenação multi-coluna, agrupamento hierárquico, totais calculados, formatação condicional e edição on-object.",
   "version": "1.0.1.0",
-  "repository": {
-    "type": "default_template_value",
-    "url": "default_template_value"
+  "author": {
+    "name": "Thalis Rebouças",
+    "email": "thalisreboucasdeoliveira@gmail.com"
   },
+  "homepage": "https://github.com/thalisreboucas/mordentable",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thalisreboucas/mordentable.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thalisreboucas/mordentable/issues"
+  },
+  "keywords": [
+    "powerbi",
+    "powerbi-visual",
+    "custom-visual",
+    "table",
+    "matrix",
+    "data-grid",
+    "typescript"
+  ],
   "license": "MIT",
   "scripts": {
     "pbiviz": "pbiviz",
     "start": "pbiviz start",
     "package": "pbiviz package",
-    "lint": "npx eslint ."
+    "lint": "npx eslint .",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@types/d3": "7.4.3",
     "d3": "^7.9.0",
-    "i": "^0.3.7",
     "powerbi-visuals-api": "~5.3.0",
     "powerbi-visuals-utils-formattingmodel": "6.0.4"
   },

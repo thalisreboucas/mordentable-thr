@@ -11,9 +11,14 @@ import IVisualHost = powerbi.extensibility.visual.IVisualHost;
 import DataView = powerbi.DataView;
 
 import { VisualFormattingSettingsModel } from "./settings";
-import { AdvancedModernTable, IAdvancedColumn, IAdvancedRow, IAdvancedTableConfig } from "./advanced-table";
+import { AdvancedModernTable } from "./advanced-table";
+import { IAdvancedColumn, IAdvancedRow, IAdvancedTableConfig } from "./types";
 
 type DataType = IAdvancedColumn["dataType"];
+
+// Verbose logging is disabled in production builds. Set DEBUG to true during
+// development to print dataView snapshots and extraction details to the browser console.
+const DEBUG = false;
 
 export class Visual implements IVisual {
     private target: HTMLElement;
@@ -58,7 +63,42 @@ export class Visual implements IVisual {
             const groupingStyleConfig = this.formattingSettings?.groupingStyleCard;
             const totalsStyleConfig = this.formattingSettings?.totalsStyleCard;
 
+            // ─── DEBUG: log raw dataView structure ────────────────────────────
+            if (DEBUG) {
+                try {
+                    const dv: any = dataView;
+                    console.group("[AdvancedTable] update() — dataView snapshot");
+                    console.log("dataView keys:", dv ? Object.keys(dv) : null);
+                    console.log("metadata.columns:", dv?.metadata?.columns?.map((c: any) => ({
+                        displayName: c.displayName,
+                        queryName: c.queryName,
+                        roles: c.roles,
+                        isMeasure: c.isMeasure,
+                        type: c.type
+                    })));
+                    console.log("matrix present:", !!dv?.matrix);
+                    if (dv?.matrix) {
+                        console.log("matrix.rows.root.children count:", dv.matrix?.rows?.root?.children?.length);
+                        console.log("matrix.columns.root.children count:", dv.matrix?.columns?.root?.children?.length);
+                        console.log("matrix.valueSources count:", dv.matrix?.valueSources?.length);
+                        console.log("matrix.rows.levels count:", dv.matrix?.rows?.levels?.length);
+                        console.log("matrix.rows.root (first child sample):", dv.matrix?.rows?.root?.children?.[0]);
+                    }
+                    console.log("table present:", !!dv?.table, "table.rows:", dv?.table?.rows?.length);
+                    console.log("categorical present:", !!dv?.categorical);
+                    console.groupEnd();
+                } catch (e) { console.warn("debug snapshot failed:", e); }
+            }
+
             const extracted = this.getRenderableData(dataView);
+
+            // ─── DEBUG: log extraction result ─────────────────────────────────
+            if (DEBUG) {
+                console.log("[AdvancedTable] extracted columns:", extracted.columns.length,
+                    "rows:", extracted.rows.length,
+                    "first row sample:", extracted.rows[0]);
+            }
+
             if (dataView && (extracted.columns.length === 0 || extracted.rows.length === 0)) {
                 this.renderEmptyState("Nenhum dado para exibir. Adicione campos em Linhas, Colunas ou Valores.");
                 return;
@@ -99,8 +139,23 @@ export class Visual implements IVisual {
         }
 
         const wrap = document.createElement("div");
-        wrap.style.cssText = "padding:16px;color:#6b7280;font-family:system-ui,sans-serif;font-size:13px";
-        wrap.textContent = message;
+        wrap.className = "mt-empty";
+
+        const icon = document.createElement("div");
+        icon.className = "mt-empty-icon";
+        icon.textContent = "↔";
+
+        const title = document.createElement("div");
+        title.className = "mt-empty-title";
+        title.textContent = "Nenhum dado para exibir";
+
+        const hint = document.createElement("div");
+        hint.className = "mt-empty-hint";
+        hint.textContent = message;
+
+        wrap.appendChild(icon);
+        wrap.appendChild(title);
+        wrap.appendChild(hint);
         this.target.appendChild(wrap);
     }
 
@@ -340,7 +395,7 @@ export class Visual implements IVisual {
             enableRowSelection: tableFeaturesConfig?.enableRowSelection?.value === true,
             enableAnalyticsCellVisuals: tableFeaturesConfig?.enableAnalyticsCellVisuals?.value === true,
 
-            enableConditionalFormatting: true,
+            enableConditionalFormatting: tableFeaturesConfig?.enableConditionalFormatting?.value === true,
         };
     }
 
@@ -568,6 +623,19 @@ export class Visual implements IVisual {
         let rowLeaves = this.collectMatrixLeaves(rowRoot);
         const colLeaves = this.collectMatrixLeaves(colRoot);
         const valueSources: any[] = Array.isArray(matrix?.valueSources) ? matrix.valueSources : [];
+
+        // ─── DEBUG ────────────────────────────────────────────────────────
+        if (DEBUG) {
+            console.group("[AdvancedTable] extractMatrixData");
+            console.log("rowLeaves count:", rowLeaves.length, "first:", rowLeaves[0]);
+            console.log("colLeaves count:", colLeaves.length, "first:", colLeaves[0]);
+            console.log("valueSources count:", valueSources.length, "sources:", valueSources.map((s: any) => ({
+                displayName: s?.displayName, queryName: s?.queryName, isMeasure: s?.isMeasure, type: s?.type
+            })));
+            console.log("rowRoot.children length:", (Array.isArray(rowRoot?.children) ? rowRoot.children.length : "n/a"));
+            console.log("rowRoot raw:", rowRoot);
+            console.groupEnd();
+        }
 
         const rowLevelSources: any[] = Array.isArray(matrix?.rows?.levels)
             ? matrix.rows.levels.map((lvl: any) => Array.isArray(lvl?.sources) ? lvl.sources[0] : null)
