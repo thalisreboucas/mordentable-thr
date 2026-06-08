@@ -6,6 +6,7 @@ import "./../style/advanced-table.less";
 
 import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
 import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
+import VisualUpdateType = powerbi.VisualUpdateType;
 import IVisual = powerbi.extensibility.visual.IVisual;
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
 import DataView = powerbi.DataView;
@@ -26,6 +27,7 @@ export class Visual implements IVisual {
     private formattingSettings: VisualFormattingSettingsModel = new VisualFormattingSettingsModel();
     private formattingSettingsService: FormattingSettingsService;
     private table: AdvancedModernTable;
+    private hasRenderedOnce: boolean = false;
 
     constructor(options: VisualConstructorOptions) {
         this.formattingSettingsService = new FormattingSettingsService();
@@ -36,6 +38,25 @@ export class Visual implements IVisual {
 
     public update(options: VisualUpdateOptions) {
         try {
+            // Dimensionamento: o Power BI entrega o tamanho exato do container.
+            // Esta é a base de layout; tableWidthPx/tableHeightPx são overrides.
+            const viewport = options.viewport;
+            if (viewport) {
+                this.table.setViewport(viewport.width, viewport.height);
+            }
+
+            // Resize puro não muda dados nem formatação: reaproveita o estado já
+            // extraído e só re-renderiza com o novo viewport, evitando o pipeline
+            // completo (re-extração do dataView + rebuild de config).
+            const updateType = options.type ?? VisualUpdateType.All;
+            const isResizeOnly =
+                updateType === VisualUpdateType.Resize ||
+                updateType === VisualUpdateType.ResizeEnd;
+            if (isResizeOnly && this.hasRenderedOnce) {
+                this.table.render();
+                return;
+            }
+
             if (options.dataViews && options.dataViews.length > 0) {
                 this.formattingSettings = this.formattingSettingsService.populateFormattingSettingsModel(
                     VisualFormattingSettingsModel,
@@ -118,6 +139,7 @@ export class Visual implements IVisual {
             this.table.setColumns(extracted.columns);
             this.table.setData(extracted.rows);
             this.table.render();
+            this.hasRenderedOnce = true;
 
         } catch (error) {
             console.error("Erro ao atualizar visual:", error);
@@ -1048,17 +1070,23 @@ export class Visual implements IVisual {
 
             const isGroupingEnabled = this.formattingSettings.tableFeaturesCard.enableGrouping.value === true;
             this.formattingSettings.tableFeaturesCard.groupByColumnName.visible = isGroupingEnabled;
+
+            // "Total por agrupamento" (subtotal) exige agrupamento; "Total geral" é
+            // independente — funciona na tabela plana, então fica sempre visível para
+            // permitir adicionar o totalizador progressivamente.
             this.formattingSettings.calculatedRowsCard.enableCalculatedRows.visible = isGroupingEnabled;
-            this.formattingSettings.calculatedRowsCard.enableAutoSum.visible = isGroupingEnabled;
+            this.formattingSettings.calculatedRowsCard.enableAutoSum.visible = true;
+            const isAutoSumEnabled = this.formattingSettings.calculatedRowsCard.enableAutoSum.value === true;
 
             this.formattingSettings.groupingStyleCard.groupedRowsBold.visible = isGroupingEnabled;
             this.formattingSettings.groupingStyleCard.groupRowBackgroundColor.visible = isGroupingEnabled;
             this.formattingSettings.groupingStyleCard.groupRowTextColor.visible = isGroupingEnabled;
             this.formattingSettings.groupingStyleCard.selectedGroupBackgroundColor.visible = isGroupingEnabled;
+            // Cores do subtotal seguem o agrupamento; cores do total geral seguem o autoSum.
             this.formattingSettings.totalsStyleCard.subtotalRowBackgroundColor.visible = isGroupingEnabled;
             this.formattingSettings.totalsStyleCard.subtotalRowTextColor.visible = isGroupingEnabled;
-            this.formattingSettings.totalsStyleCard.summaryRowBackgroundColor.visible = isGroupingEnabled;
-            this.formattingSettings.totalsStyleCard.summaryRowTextColor.visible = isGroupingEnabled;
+            this.formattingSettings.totalsStyleCard.summaryRowBackgroundColor.visible = isAutoSumEnabled;
+            this.formattingSettings.totalsStyleCard.summaryRowTextColor.visible = isAutoSumEnabled;
         }
 
         if (this.formattingSettings?.columnsIconsCard?.columnIconMap) {

@@ -85,6 +85,10 @@ export class AdvancedModernTable {
     private onObjectStateChanged?: (state: string) => void;
     private host?: any;
     private selectionManager?: any;
+    // Tamanho do container entregue pelo Power BI (options.viewport).
+    // 0 = ainda não informado; o layout cai no CSS (.mt-root 100%).
+    private viewportWidth: number = 0;
+    private viewportHeight: number = 0;
 
     constructor(
         container: HTMLElement,
@@ -342,6 +346,16 @@ export class AdvancedModernTable {
     public updateConfig(config: Partial<IAdvancedTableConfig>): void {
         this.config = { ...this.config, ...config };
         this.config.currentPage = Math.max(1, this.config.currentPage || 1);
+    }
+
+    /**
+     * Informa o tamanho do container entregue pelo Power BI (options.viewport).
+     * Vira a base de dimensionamento: tableWidthPx/tableHeightPx passam a ser
+     * apenas overrides explícitos quando > 0.
+     */
+    public setViewport(width: number, height: number): void {
+        this.viewportWidth = Math.max(0, Math.floor(width) || 0);
+        this.viewportHeight = Math.max(0, Math.floor(height) || 0);
     }
 
     public setData(rows: IAdvancedRow[]): void {
@@ -1059,24 +1073,12 @@ export class AdvancedModernTable {
     }
 
     private renderQuickActionsToolbar(): void {
-        const bar = document.createElement("div");
-        bar.className = "mt-quickbar";
-        bar.classList.toggle("mt-quickbar-collapsed", this.toolbarCollapsed);
-
-        // Botão minimizar/expandir — sempre visível
-        const collapseBtn = document.createElement("button");
-        collapseBtn.type = "button";
-        collapseBtn.className = "mt-quickbar-collapse";
-        collapseBtn.title = this.toolbarCollapsed ? "Expandir barra de atalhos" : "Minimizar barra de atalhos";
-        collapseBtn.textContent = this.toolbarCollapsed ? "◉" : "‹";
-        bar.appendChild(collapseBtn);
-
-        // Conteúdo colapsável
-        const content = document.createElement("div");
-        content.className = "mt-quickbar-content";
-        if (this.toolbarCollapsed) content.style.display = "none";
-
+        // (1) Barra de busca — ferramenta de DADOS, fica visível no topo quando
+        // habilitada. Só aparece se o usuário ligar a "Busca global" (off no minimal).
         if (this.config.showQuickFilter) {
+            const bar = document.createElement("div");
+            bar.className = "mt-searchbar";
+
             const search = document.createElement("input");
             search.type = "text";
             search.className = "mt-quickbar-search";
@@ -1086,7 +1088,7 @@ export class AdvancedModernTable {
                 this.setQuickFilter(search.value);
                 this.refreshBodyAndPagination();
             });
-            content.appendChild(search);
+            bar.appendChild(search);
 
             const clearFiltersBtn = document.createElement("button");
             clearFiltersBtn.type = "button";
@@ -1097,7 +1099,7 @@ export class AdvancedModernTable {
                 search.value = "";
                 this.refreshBodyAndPagination();
             });
-            content.appendChild(clearFiltersBtn);
+            bar.appendChild(clearFiltersBtn);
 
             const clearSortBtn = document.createElement("button");
             clearSortBtn.type = "button";
@@ -1107,57 +1109,80 @@ export class AdvancedModernTable {
                 this.clearSorting();
                 this.refreshBodyAndPagination();
             });
-            content.appendChild(clearSortBtn);
+            bar.appendChild(clearSortBtn);
 
-            const sep = document.createElement("div");
-            sep.className = "mt-quickbar-sep";
-            content.appendChild(sep);
+            this.container.appendChild(bar);
         }
 
-        // Atalhos de formatação rápida
-        const makeToggle = (label: string, title: string, active: boolean, onClick: () => void) => {
+        // (2) Engrenagem flutuante de personalização (canto inferior-direito).
+        // Fica oculta e só aparece ao passar o mouse no visual; abre um popover
+        // com os atalhos de aparência. Sai da linha de leitura do topo.
+        const wrap = document.createElement("div");
+        wrap.className = "mt-fab-wrap";
+        wrap.classList.toggle("mt-fab-open", !this.toolbarCollapsed);
+
+        const gearBtn = document.createElement("button");
+        gearBtn.type = "button";
+        gearBtn.className = "mt-fab";
+        gearBtn.setAttribute("aria-label", "Personalizar tabela");
+        gearBtn.setAttribute("aria-expanded", String(!this.toolbarCollapsed));
+        gearBtn.title = "Personalizar tabela";
+        gearBtn.textContent = "⚙";
+
+        const pop = document.createElement("div");
+        pop.className = "mt-fab-popover";
+        pop.setAttribute("role", "menu");
+
+        const popTitle = document.createElement("div");
+        popTitle.className = "mt-fab-popover-title";
+        popTitle.textContent = "Personalizar";
+        pop.appendChild(popTitle);
+
+        // Atalhos de formatação rápida (glifo + rótulo legível)
+        const makeToggle = (glyph: string, label: string, active: boolean, onClick: () => void) => {
             const btn = document.createElement("button");
             btn.type = "button";
-            btn.className = "mt-quickbar-toggle" + (active ? " mt-quickbar-toggle-active" : "");
-            btn.title = title;
-            btn.textContent = label;
+            btn.className = "mt-fab-toggle" + (active ? " mt-fab-toggle-active" : "");
+            btn.title = label;
+            const ic = document.createElement("span");
+            ic.className = "mt-fab-toggle-ic";
+            ic.textContent = glyph;
+            const tx = document.createElement("span");
+            tx.className = "mt-fab-toggle-tx";
+            tx.textContent = label;
+            btn.appendChild(ic);
+            btn.appendChild(tx);
             btn.addEventListener("click", onClick);
             return btn;
         };
 
-        content.appendChild(makeToggle("⌕", "Busca global", this.config.showQuickFilter, () => {
+        pop.appendChild(makeToggle("⌕", "Busca global", this.config.showQuickFilter, () => {
             this.setPerformanceOverride("showQuickFilter", !this.config.showQuickFilter);
         }));
-        content.appendChild(makeToggle("⊟", "Filtros nas colunas", this.config.showHeaderFilter, () => {
+        pop.appendChild(makeToggle("⊟", "Filtros nas colunas", this.config.showHeaderFilter, () => {
             this.setPerformanceOverride("showHeaderFilter", !this.config.showHeaderFilter);
         }));
-
-        const sep2 = document.createElement("div");
-        sep2.className = "mt-quickbar-sep";
-        content.appendChild(sep2);
-
-        content.appendChild(makeToggle("◈", "Ícones nas colunas", this.config.showColumnIcons, () => {
+        pop.appendChild(makeToggle("◈", "Ícones nas colunas", this.config.showColumnIcons, () => {
             this.setPerformanceOverride("showColumnIcons", !this.config.showColumnIcons);
         }));
-        content.appendChild(makeToggle("▤", "Linhas alternadas", this.config.striped, () => {
+        pop.appendChild(makeToggle("▤", "Linhas alternadas", this.config.striped, () => {
             this.setPerformanceOverride("striped", !this.config.striped);
         }));
-        content.appendChild(makeToggle("⊜", "Compacto", this.config.spacingMode === "compact", () => {
+        pop.appendChild(makeToggle("⊜", "Compacto", this.config.spacingMode === "compact", () => {
             this.setPerformanceOverride("spacingMode",
                 this.config.spacingMode === "compact" ? "comfortable" : "compact");
         }));
 
-        bar.appendChild(content);
-
-        collapseBtn.addEventListener("click", () => {
+        gearBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
             this.toolbarCollapsed = !this.toolbarCollapsed;
-            bar.classList.toggle("mt-quickbar-collapsed", this.toolbarCollapsed);
-            content.style.display = this.toolbarCollapsed ? "none" : "";
-            collapseBtn.textContent = this.toolbarCollapsed ? "◉" : "‹";
-            collapseBtn.title = this.toolbarCollapsed ? "Expandir barra de atalhos" : "Minimizar barra de atalhos";
+            wrap.classList.toggle("mt-fab-open", !this.toolbarCollapsed);
+            gearBtn.setAttribute("aria-expanded", String(!this.toolbarCollapsed));
         });
 
-        this.container.appendChild(bar);
+        wrap.appendChild(gearBtn);
+        wrap.appendChild(pop);
+        this.container.appendChild(wrap);
     }
 
     private renderGroupToolbar(): void {
@@ -1222,10 +1247,12 @@ export class AdvancedModernTable {
             s.setProperty("--mt-icon-bg", this.config.iconBackgroundColor);
         }
 
-        // Ensure pixel-perfect rendering properties are maintained
+        // Dicas de qualidade de texto seguras em qualquer DPI.
+        // NÃO usar `geometricPrecision` aqui: ele desativa o hinting e BORRA texto
+        // pequeno na maioria dos navegadores (ver applyPixelQualityAdjustments).
         s.setProperty("-webkit-font-smoothing", "antialiased");
         s.setProperty("-moz-osx-font-smoothing", "grayscale");
-        s.setProperty("text-rendering", "geometricPrecision");
+        s.setProperty("text-rendering", "optimizeLegibility");
     }
 
     private applyTableDimensions(wrapper: HTMLElement): void {
@@ -1292,9 +1319,13 @@ export class AdvancedModernTable {
         s.setProperty("-moz-osx-font-smoothing", "grayscale");
         s.setProperty("text-rendering", "optimizeLegibility");
 
-        // Keep cheap GPU compositing (no scaling) for smooth scroll/pan.
-        s.setProperty("backface-visibility", "hidden");
-        s.setProperty("-webkit-backface-visibility", "hidden");
+        // NÃO promover o container a uma camada de composição GPU. `backface-visibility:
+        // hidden` (e translateZ/will-change) forçam o navegador a rasterizar este
+        // elemento em um bitmap próprio — frequentemente em resolução 1x — o que deixa
+        // o texto visivelmente pixelado em telas HiDPI (Retina/200%). Deixar o navegador
+        // pintar direto mantém o texto nítido na resolução real do dispositivo.
+        s.removeProperty("backface-visibility");
+        s.removeProperty("-webkit-backface-visibility");
     }
 
     // ─── Header ───────────────────────────────────────────────────────────────
@@ -1716,7 +1747,12 @@ export class AdvancedModernTable {
         const bufferRows = 10;
 
         const renderWindow = () => {
-            const viewportHeight = Math.max(200, wrapper.clientHeight || this.config.tableHeightPx || 500);
+            // Ordem de confiança: altura já renderizada → viewport do host
+            // (garantido pelo Power BI, robusto no primeiro paint) → override px → fallback.
+            const viewportHeight = Math.max(
+                200,
+                wrapper.clientHeight || this.viewportHeight || this.config.tableHeightPx || 500
+            );
             const scrollTop = wrapper.scrollTop;
             const start = Math.max(0, Math.floor(scrollTop / rowHeight) - bufferRows);
             const visibleCount = Math.ceil(viewportHeight / rowHeight) + (bufferRows * 2);

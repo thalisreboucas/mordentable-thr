@@ -53,7 +53,7 @@ class TableAppearanceBasicsCard extends FormattingSettingsCard {
         name: "theme",
         displayName: "Tema",
         items: THEME_ITEMS,
-        value: THEME_ITEMS[0]
+        value: THEME_ITEMS[2] // Minimal por padrão (estado inicial limpo)
     });
 
     accentColor = new formattingSettings.ColorPicker({
@@ -151,7 +151,7 @@ class TableFeaturesCard extends FormattingSettingsCard {
     enablePagination = new formattingSettings.ToggleSwitch({
         name: "enablePagination",
         displayName: "Paginação",
-        value: true
+        value: false // Estado inicial minimal: ativar quando precisar
     });
 
     pageSize = new formattingSettings.NumUpDown({
@@ -182,7 +182,7 @@ class TableFeaturesCard extends FormattingSettingsCard {
     showQuickFilter = new formattingSettings.ToggleSwitch({
         name: "showQuickFilter",
         displayName: "Busca global acima da tabela",
-        value: true
+        value: false // Estado inicial minimal: sem barra superior
     });
 
     showRowNumbers = new formattingSettings.ToggleSwitch({
@@ -231,13 +231,13 @@ class CalculatedRowsCard extends FormattingSettingsCard {
     enableCalculatedRows = new formattingSettings.ToggleSwitch({
         name: "enableCalculatedRows",
         displayName: "Total por agrupamento",
-        value: true
+        value: false // Estado inicial minimal: adicionar totais progressivamente
     });
 
     enableAutoSum = new formattingSettings.ToggleSwitch({
         name: "enableAutoSum",
         displayName: "Total geral (grand total)",
-        value: true
+        value: false // Estado inicial minimal: adicionar totais progressivamente
     });
 
     name: string = "calculatedRows";
@@ -266,7 +266,7 @@ class ColorsAndBordersCard extends FormattingSettingsCard {
     striped = new formattingSettings.ToggleSwitch({
         name: "striped",
         displayName: "Linhas zebradas (alternadas)",
-        value: true
+        value: false // Estado inicial minimal: sem zebra
     });
 
     headerBackgroundColor = new formattingSettings.ColorPicker({
