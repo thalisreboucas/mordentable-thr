@@ -74,10 +74,10 @@
     --mt-pagination-bg: #f7f9fc;
     --mt-pagination-control-bg: #ffffff;
 
-    /* Icon colors and backgrounds */
-    --mt-icon-color: #155e75;
-    --mt-icon-bg: rgba(20, 184, 166, 0.12);
-    --mt-icon-border: rgba(13, 148, 136, 0.24);
+    /* Icon colors — light header is dark (#0f172a), so icons must be light */
+    --mt-icon-color: #94a3b8;
+    --mt-icon-bg: rgba(255, 255, 255, 0.08);
+    --mt-icon-border: rgba(255, 255, 255, 0.14);
     --mt-sort-color: #64748b;
     --mt-sort-active-color: #0f766e;
     --mt-filter-color: #64748b;
@@ -263,19 +263,31 @@
     text-rendering: optimizeLegibility;
     color: var(--mt-text, #111827);
     background:
-        radial-gradient(circle at top left, rgba(59, 130, 246, 0.08) 0%, transparent 32%),
-        radial-gradient(circle at bottom right, rgba(15, 118, 110, 0.08) 0%, transparent 30%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.86) 0%, rgba(247, 249, 252, 0.96) 100%);
+        radial-gradient(circle at top left, rgba(59, 130, 246, 0.06) 0%, transparent 32%),
+        radial-gradient(circle at bottom right, rgba(15, 118, 110, 0.06) 0%, transparent 30%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.90) 0%, rgba(247, 249, 252, 0.98) 100%);
     border: var(--mt-border-width, 1px) solid var(--mt-border-color, #e5e7eb);
-    border-radius: 18px;
-    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
-    overflow: hidden;
+    border-radius: 14px;
+    /* Sombra via pseudo-element: não cria GPU layer no container de texto */
     position: relative;
     box-sizing: border-box;
+    /* isolation: isolate previne que filhos criem stacking contexts desnecessários */
+    isolation: isolate;
 
     * {
         box-sizing: border-box;
     }
+}
+
+/* Sombra decorativa no pseudo-element — sem afetar composição do texto */
+.mt-root::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 14px;
+    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08), 0 1px 4px rgba(15, 23, 42, 0.05);
+    pointer-events: none;
+    z-index: -1;
 }
 
 /* ─── Table Wrapper (scrollable) ─────────────────────────────────────────── */
@@ -285,10 +297,11 @@
     overflow: auto;
     position: relative;
     -webkit-overflow-scrolling: touch;
-    border-radius: 18px;
+    /* REMOVIDO: border-radius + box-shadow do wrapper evita segunda GPU layer
+       que desfocava texto com muitas colunas */
+    border-radius: 8px;
     border: 1px solid var(--mt-border-color, #e5e7eb);
     background: var(--mt-row-base-override, var(--mt-bg, #ffffff));
-    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.10);
 }
 
 .mt-table-wrapper::-webkit-scrollbar {
@@ -423,22 +436,61 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0;
-    border-radius: 0;
-    background: transparent;
-    border: none;
+    min-width: 20px;
+    height: 20px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    background: var(--mt-icon-bg, rgba(0,0,0,0.06));
+    border: 1px solid var(--mt-icon-border, rgba(0,0,0,0.10));
     color: var(--mt-icon-color, #374151);
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.02em;
-    opacity: 0.9;
+    opacity: 1;
     line-height: 1;
 }
 
 .mt-col-icon svg {
     display: block;
+    pointer-events: none;
+}
+
+/* Inside header cells — always use the header text color for guaranteed contrast */
+.mt-th .mt-col-icon {
+    color: var(--mt-header-text-override, var(--mt-header-text, #e2e8f0));
+    background: rgba(128, 128, 128, 0.12);
+    border-color: rgba(128, 128, 128, 0.20);
+    opacity: 0.9;
+}
+
+/* Sort/filter icons in header — match header text color */
+.mt-th .mt-sort-icon,
+.mt-th .mt-filter-btn {
+    color: var(--mt-header-text-override, var(--mt-header-text, #e2e8f0));
+    opacity: 0.45;
+}
+
+.mt-th .mt-sort-icon.mt-sort-active {
+    color: var(--mt-header-text-override, var(--mt-header-text, #e2e8f0));
+    opacity: 1;
+}
+
+/* Minimal theme: slightly stronger contrast since background is white */
+.mt-root.mt-theme-minimal .mt-th .mt-col-icon {
+    color: var(--mt-header-text, #1f2937);
+    background: rgba(31, 41, 55, 0.07);
+    border-color: rgba(31, 41, 55, 0.14);
+    opacity: 0.85;
+}
+
+.mt-root.mt-theme-minimal .mt-th .mt-sort-icon,
+.mt-root.mt-theme-minimal .mt-th .mt-filter-btn {
+    color: var(--mt-header-text, #1f2937);
+    opacity: 0.40;
+}
+
+.mt-root.mt-theme-minimal .mt-th .mt-sort-icon.mt-sort-active {
+    opacity: 0.90;
 }
 
 .mt-col-title {
@@ -2500,4 +2552,911 @@
         gap: 6px;
         padding: 8px;
     }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   NEW FEATURES — Financial Mode, Row Dashboard, Cell Styles, Filter Chips
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Financial Tabs ─────────────────────────────────────────────────────── */
+.mt-financial-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 2px 0;
+    border-bottom: 2px solid var(--mt-border-color);
+    flex-shrink: 0;
+}
+
+.mt-financial-tab {
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--mt-text-3);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    cursor: pointer;
+    transition: color 120ms, border-color 120ms;
+    font-family: inherit;
+    border-radius: 6px 6px 0 0;
+
+    &:hover {
+        color: var(--mt-text);
+        background: var(--mt-hover);
+    }
+}
+
+.mt-financial-tab-active {
+    color: var(--mt-accent);
+    border-bottom-color: var(--mt-accent);
+    font-weight: 600;
+}
+
+/* ─── Filter Chips Toolbar ───────────────────────────────────────────────── */
+.mt-filter-chips-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 2px;
+    flex-shrink: 0;
+    align-items: center;
+}
+
+.mt-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--mt-border-color);
+    background: var(--mt-bg);
+    color: var(--mt-text-2);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 100ms, border-color 100ms, color 100ms;
+    white-space: nowrap;
+
+    &:hover {
+        background: var(--mt-hover);
+        border-color: var(--mt-accent);
+        color: var(--mt-accent);
+    }
+}
+
+.mt-filter-chip-active {
+    background: var(--mt-accent-light, rgba(15,118,110,0.10));
+    border-color: var(--mt-accent);
+    color: var(--mt-accent);
+    font-weight: 600;
+}
+
+.mt-filter-chip-icon {
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+.mt-filter-chip-label {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mt-filter-chip-value {
+    font-weight: 600;
+    color: var(--mt-accent);
+    font-size: 11px;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mt-filter-chip-arrow {
+    font-size: 10px;
+    opacity: 0.5;
+}
+
+.mt-filter-chip-clear {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--mt-text-4);
+    font-size: 11px;
+    padding: 0;
+    line-height: 1;
+    margin-left: 2px;
+    font-family: inherit;
+    border-radius: 50%;
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 100ms, color 100ms;
+
+    &:hover {
+        background: var(--mt-danger, #ef4444);
+        color: #fff;
+    }
+}
+
+.mt-filter-chip-clear-all {
+    color: var(--mt-danger, #ef4444);
+    border-color: var(--mt-danger, #ef4444);
+    font-size: 11px;
+
+    &:hover {
+        background: rgba(239, 68, 68, 0.08);
+    }
+}
+
+/* ─── Row Dashboard Toggle ───────────────────────────────────────────────── */
+.mt-td-dashboard-toggle {
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    flex: 0 0 28px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 !important;
+    border-right: 1px solid var(--mt-border-light);
+}
+
+.mt-dashboard-expand-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--mt-text-3);
+    font-size: 11px;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    font-family: inherit;
+    transition: background 100ms, color 100ms;
+
+    &:hover {
+        background: var(--mt-accent-light);
+        color: var(--mt-accent);
+    }
+}
+
+/* ─── Row Dashboard Panel ────────────────────────────────────────────────── */
+.mt-dashboard-panel {
+    background: var(--mt-surface);
+    border-bottom: 1px solid var(--mt-border-color);
+    border-top: 1px solid var(--mt-border-light);
+    animation: mt-panel-in 120ms ease;
+    width: 100%;
+}
+
+.mt-dashboard-inner {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 14px 20px 16px;
+}
+
+.mt-dashboard-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--mt-text-4);
+    margin-bottom: 8px;
+}
+
+.mt-dashboard-metrics {
+    flex: 1 1 280px;
+}
+
+.mt-dashboard-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.mt-dashboard-card {
+    background: var(--mt-bg);
+    border: 1px solid var(--mt-border-light);
+    border-radius: var(--mt-radius);
+    padding: 8px 12px;
+    min-width: 100px;
+    flex: 1 1 100px;
+    max-width: 160px;
+}
+
+.mt-dashboard-card-label {
+    display: block;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--mt-text-4);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+}
+
+.mt-dashboard-card-value {
+    display: block;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--mt-text);
+    margin-bottom: 6px;
+}
+
+.mt-dashboard-card-bar {
+    height: 4px;
+    background: var(--mt-border-light);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.mt-dashboard-card-bar-fill {
+    height: 100%;
+    background: var(--mt-accent);
+    border-radius: 2px;
+    transition: width 300ms ease;
+}
+
+.mt-dashboard-sparkline-section {
+    flex: 2 1 320px;
+}
+
+.mt-dashboard-sparkline {
+    min-height: 80px;
+}
+
+.mt-enhanced-sparkline {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mt-enhanced-sparkline-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 60px;
+    background: var(--mt-bg);
+    border-radius: var(--mt-radius);
+    border: 1px solid var(--mt-border-light);
+    padding: 6px 6px 4px;
+    overflow: hidden;
+}
+
+.mt-enhanced-sparkline-col {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    height: 100%;
+    min-width: 4px;
+}
+
+.mt-enhanced-sparkline-bar {
+    width: 100%;
+    background: var(--mt-accent);
+    border-radius: 2px 2px 0 0;
+    opacity: 0.75;
+    min-height: 2px;
+    transition: opacity 100ms;
+
+    &:hover {
+        opacity: 1;
+    }
+}
+
+.mt-enhanced-sparkline-axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--mt-text-4);
+    padding: 0 2px;
+}
+
+.mt-dashboard-user-metrics {
+    flex: 1 1 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mt-dashboard-metric-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--mt-border-light);
+    font-size: 12px;
+}
+
+.mt-dashboard-metric-label {
+    color: var(--mt-text-3);
+}
+
+.mt-dashboard-metric-value {
+    font-weight: 600;
+    color: var(--mt-text);
+}
+
+.mt-dashboard-metric-up { color: #16a34a; }
+.mt-dashboard-metric-down { color: #dc2626; }
+
+/* ─── Variance Cell ──────────────────────────────────────────────────────── */
+.mt-td-variance {
+    font-variant-numeric: tabular-nums;
+}
+
+.mt-variance-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.mt-variance-value {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.mt-variance-positive { color: #16a34a; }
+.mt-variance-negative { color: #dc2626; }
+.mt-variance-neutral  { color: var(--mt-text-3); }
+
+.mt-variance-arrow {
+    font-size: 11px;
+    font-weight: 700;
+}
+
+/* ─── Score Cell ─────────────────────────────────────────────────────────── */
+.mt-td-score {}
+
+.mt-score-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mt-score-num {
+    font-weight: 700;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    color: var(--mt-text);
+}
+
+.mt-score-grade {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1;
+}
+
+/* ─── Multi-Chip Cell ────────────────────────────────────────────────────── */
+.mt-td-multichip {}
+
+.mt-multichip-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
+
+.mt-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    line-height: 1.4;
+}
+
+/* ─── Flag Cell ──────────────────────────────────────────────────────────── */
+.mt-td-flag {}
+
+.mt-flag-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mt-flag-emoji {
+    font-size: 16px;
+    line-height: 1;
+}
+
+.mt-flag-code {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mt-text-2);
+}
+
+/* ─── Enhanced column group header styling ───────────────────────────────── */
+.mt-th-group:not(.mt-th-group-placeholder) {
+    background: var(--mt-header-bg-override, var(--mt-header-bg));
+    color: var(--mt-header-text-override, var(--mt-header-text));
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    justify-content: center;
+    border-bottom: 2px solid var(--mt-accent);
+    opacity: 0.9;
+}
+
+.mt-th-group-placeholder {
+    background: var(--mt-header-bg-override, var(--mt-header-bg));
+    opacity: 0.6;
+}
+
+/* ─── Financial mode row indentation ─────────────────────────────────────── */
+.mt-root .mt-tr-group .mt-group-cell-inner {
+    font-weight: 600;
+}
+
+/* Financial section separators */
+.mt-root .mt-tr-group .mt-td:first-child {
+    border-left: 3px solid var(--mt-accent);
+}
+
+/* ─── Dark theme overrides for new features ──────────────────────────────── */
+.mt-root.mt-theme-dark {
+    .mt-financial-tab { color: var(--mt-text-3); }
+    .mt-financial-tab-active { color: var(--mt-accent); }
+    .mt-filter-chip { background: var(--mt-surface); }
+    .mt-dashboard-panel { background: var(--mt-surface); }
+    .mt-dashboard-card { background: var(--mt-bg); }
+    .mt-enhanced-sparkline-bars { background: var(--mt-bg); }
+}
+
+/* ─── Minimal theme overrides ─────────────────────────────────────────────── */
+.mt-root.mt-theme-minimal {
+    .mt-financial-tab { font-weight: 500; }
+    .mt-filter-chip { border-radius: 6px; }
+    .mt-dashboard-panel { box-shadow: none; }
+}
+
+
+
+/* =============================================================================
+   MORDENTABLE EDITOR  (mte-*)
+   Side-panel editor — 380px right panel, table preview on left
+   ============================================================================= */
+
+.mte-root {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    background: #f8fafc;
+    color: #111827;
+    overflow: hidden;
+    box-sizing: border-box;
+    * { box-sizing: border-box; }
+}
+
+/* -- Header ----------------------------------------------------------------- */
+.mte-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    height: 44px;
+    background: #0f172a;
+    color: #e2e8f0;
+    border-bottom: 1px solid #1e293b;
+    flex-shrink: 0;
+    gap: 8px;
+}
+.mte-topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #94a3b8;
+    white-space: nowrap;
+    overflow: hidden;
+    strong { color: #e2e8f0; }
+    svg { color: #38bdf8; flex-shrink: 0; }
+}
+.mte-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+/* -- Tab bar (horizontal, replaces sidebar in narrow panel) ----------------- */
+.mte-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+}
+.mte-sidebar {
+    display: flex;
+    flex-direction: row;
+    flex-shrink: 0;
+    background: #1e293b;
+    border-bottom: 1px solid #334155;
+    padding: 0 6px;
+    gap: 2px;
+    overflow-x: auto;
+}
+.mte-nav-btn {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+    padding: 0 10px;
+    height: 36px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 120ms, border-color 120ms;
+    svg { width: 13px; height: 13px; flex-shrink: 0; }
+    &:hover { color: #e2e8f0; }
+}
+.mte-nav-active {
+    color: #38bdf8 !important;
+    border-bottom-color: #38bdf8 !important;
+}
+
+/* -- Scrollable content area ----------------------------------------------- */
+.mte-content {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 14px;
+    background: #f8fafc;
+}
+.mte-section {
+    margin-bottom: 24px;
+    h2 {
+        font-size: 13px;
+        font-weight: 700;
+        color: #0f172a;
+        margin: 0 0 3px;
+    }
+    > p {
+        font-size: 11px;
+        color: #64748b;
+        margin: 0 0 12px;
+        line-height: 1.4;
+    }
+}
+
+/* -- Mode cards ------------------------------------------------------------- */
+.mte-mode-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+}
+.mte-mode-card {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    background: #ffffff;
+    cursor: pointer;
+    transition: border-color 150ms, box-shadow 150ms;
+    input[type="radio"] { display: none; }
+    svg { color: #64748b; flex-shrink: 0; margin-top: 2px; }
+    div { display: flex; flex-direction: column; gap: 2px; }
+    strong { font-size: 12px; font-weight: 700; color: #0f172a; }
+    span { font-size: 11px; color: #6b7280; line-height: 1.3; }
+    &:hover { border-color: #94a3b8; }
+}
+.mte-mode-card.mte-selected {
+    border-color: #0284c7;
+    box-shadow: 0 0 0 2px rgba(2,132,199,0.12);
+    svg { color: #0284c7; }
+}
+
+/* -- Field grid ------------------------------------------------------------- */
+.mte-field-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 4px;
+}
+.mte-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    span { font-size: 11px; font-weight: 600; color: #374151; }
+}
+.mte-field-toggle {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+
+/* -- Inputs / Selects ------------------------------------------------------- */
+.mte-inp, .mte-sel, .mte-sel-sm {
+    padding: 5px 9px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #ffffff;
+    font-size: 12px;
+    color: #111827;
+    outline: none;
+    width: 100%;
+    transition: border-color 120ms;
+    &:focus { border-color: #0284c7; box-shadow: 0 0 0 2px rgba(2,132,199,0.10); }
+}
+.mte-sel, .mte-sel-sm { cursor: pointer; }
+.mte-sel-sm { padding: 4px 7px; font-size: 11px; width: auto; }
+.mte-inp-sm { padding: 4px 7px; font-size: 11px; width: 80px; }
+.mte-inp-formula {
+    width: 100%;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 11px;
+}
+
+/* -- Toggle switch ---------------------------------------------------------- */
+.mte-toggle-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    input { position: absolute; opacity: 0; width: 0; height: 0; }
+}
+.mte-toggle-slider {
+    display: block;
+    width: 34px;
+    height: 18px;
+    background: #d1d5db;
+    border-radius: 9px;
+    transition: background 150ms;
+    position: relative;
+    flex-shrink: 0;
+    &::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #ffffff;
+        transition: left 150ms;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+}
+.mte-toggle-wrap input:checked + .mte-toggle-slider {
+    background: #0284c7;
+    &::after { left: 18px; }
+}
+
+/* -- Column list ------------------------------------------------------------ */
+.mte-col-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.mte-col-row {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 7px;
+    padding: 10px 12px;
+}
+.mte-col-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #374151;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #f3f4f6;
+}
+.mte-col-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+.mte-field-sm {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    span {
+        font-size: 10px;
+        font-weight: 600;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+}
+
+/* -- Calculated rows -------------------------------------------------------- */
+.mte-syntax-box {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 11px;
+    color: #475569;
+    margin-bottom: 12px;
+    strong { color: #0f172a; width: 100%; }
+    code {
+        background: #e2e8f0;
+        border-radius: 3px;
+        padding: 1px 5px;
+        font-family: "Cascadia Code", "Consolas", monospace;
+        font-size: 10px;
+        color: #0f172a;
+    }
+}
+.mte-calc-item {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 7px;
+    margin-bottom: 8px;
+    overflow: hidden;
+}
+.mte-calc-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e5e7eb;
+    flex-wrap: wrap;
+}
+.mte-calc-label { flex: 1; min-width: 80px; }
+.mte-calc-formulas {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.mte-calc-formula-hint {
+    font-size: 10px;
+    font-weight: 600;
+    color: #9ca3af;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 3px;
+}
+.mte-formula-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    span { font-size: 10px; color: #6b7280; font-weight: 600; }
+}
+
+/* -- Conditional rules ------------------------------------------------------ */
+.mte-cond-item {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 10px 12px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 7px;
+    margin-bottom: 8px;
+}
+.mte-cond-row1, .mte-cond-row2 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.mte-color-pair { display: flex; gap: 8px; align-items: center; }
+.mte-color-lbl {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    font-size: 11px;
+    color: #374151;
+    font-weight: 600;
+    input[type="color"] {
+        width: 28px;
+        height: 22px;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        padding: 1px;
+        cursor: pointer;
+        background: none;
+    }
+}
+
+/* -- Buttons ---------------------------------------------------------------- */
+.mte-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    white-space: nowrap;
+    transition: background 120ms;
+}
+.mte-btn-primary {
+    background: #0284c7;
+    color: #ffffff;
+    &:hover { background: #0369a1; }
+}
+.mte-btn-ghost {
+    background: rgba(255,255,255,0.07);
+    color: #94a3b8;
+    border: 1px solid rgba(255,255,255,0.12);
+    &:hover { background: rgba(255,255,255,0.13); color: #e2e8f0; }
+}
+.mte-btn-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 12px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 6px;
+    background: transparent;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 6px;
+    width: 100%;
+    justify-content: center;
+    transition: border-color 120ms, color 120ms;
+    &:hover { border-color: #0284c7; color: #0284c7; background: rgba(2,132,199,0.04); }
+}
+.mte-btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: #9ca3af;
+    cursor: pointer;
+    flex-shrink: 0;
+    &:hover { background: #fee2e2; color: #dc2626; }
+}
+
+/* -- Empty / hint ----------------------------------------------------------- */
+.mte-empty {
+    padding: 20px;
+    text-align: center;
+    color: #9ca3af;
+    font-size: 12px;
+    background: #f9fafb;
+    border: 1px dashed #d1d5db;
+    border-radius: 7px;
+}
+.mte-empty-hint {
+    font-size: 10px;
+    color: #9ca3af;
+    font-style: italic;
 }

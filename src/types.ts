@@ -36,7 +36,7 @@ export interface IAdvancedColumn {
     minWidth?: number;       // minimum px when resizing (default: 48)
     customIcon?: string;     // custom SVG icon for column header
     dataBar?: boolean;       // render numeric cells as data bars
-    cellStyle?: "text" | "badge" | "progress";
+    cellStyle?: "text" | "badge" | "progress" | "score" | "variance" | "multichip" | "flag";
     badgeShape?: "rectangle" | "oval";
     badgePalette?: "soft" | "vivid";
     pinned?: "left" | "right" | null;
@@ -46,6 +46,15 @@ export type ColumnFormattingOverride = Partial<Pick<
     IAdvancedColumn,
     "alignment" | "fontFamily" | "fontSize" | "textColor" | "bold" | "italic" | "underline" | "strikethrough" | "dataBar" | "cellStyle" | "badgeShape" | "badgePalette"
 >>;
+
+// ─── Column Group (multi-level headers) ─────────────────────────────────────
+
+export interface IColumnGroup {
+    label: string;
+    colNames: string[];
+    backgroundColor?: string;
+    textColor?: string;
+}
 
 export type ColumnIconOverride = {
     svg?: string;
@@ -89,6 +98,13 @@ export interface IAdvancedRow {
     groupKey?: string;
     groupColumnIndex?: number;
     identity?: any;
+    // Row dashboard / drill-down
+    isDashboardExpanded?: boolean;
+    dashboardMetrics?: Array<{ label: string; value: any; changeValue?: number; trend?: "up" | "down" | "neutral" }>;
+    // Financial hierarchy indentation (overrides groupLevel for display)
+    hierarchyLevel?: number;
+    // Financial section tag for tab filtering
+    financialSection?: string;
 }
 
 // ─── Conditional Formatting ───────────────────────────────────────────────
@@ -208,4 +224,28 @@ export interface IAdvancedTableConfig {
     showRowNumbers: boolean;
     enableRowSelection: boolean;
     enableAnalyticsCellVisuals: boolean;
+
+    // Table mode
+    tableMode: "general" | "financial" | "matrix";
+
+    // Filter chips toolbar
+    showFilterChips: boolean;
+
+    // Row expand dashboard
+    enableRowDashboard: boolean;
+
+    // Number scale
+    numberScaleMode: "auto" | "none" | "K" | "M" | "B";
+
+    // Date display
+    dateDisplayFormat: "short" | "medium" | "long" | "relative";
+
+    // Financial style
+    financialPositiveColor: string;
+    financialNegativeColor: string;
+    financialHierarchyIndent: number;
+
+    // Financial tabs (semicolon-separated tab labels)
+    financialTabs: string[];
+    financialActiveTab: number;
 }

@@ -208,6 +208,73 @@
                     "type": { "formatting": { "fontSize": true } }
                 }
             }
+        },
+        "tableModeCard": {
+            "properties": {
+                "tableMode": {
+                    "type": {
+                        "enumeration": [
+                            { "displayName": "Geral (Grid / Competitors)", "value": "general" },
+                            { "displayName": "Financeiro (DRE / P&L / DFC)", "value": "financial" },
+                            { "displayName": "Matriz (Pivot)", "value": "matrix" }
+                        ]
+                    }
+                },
+                "showFilterChips": {
+                    "type": { "bool": true }
+                },
+                "enableRowDashboard": {
+                    "type": { "bool": true }
+                },
+                "financialTabsInput": {
+                    "type": { "text": true }
+                }
+            }
+        },
+        "numberFormat": {
+            "properties": {
+                "numberScaleMode": {
+                    "type": {
+                        "enumeration": [
+                            { "displayName": "Automático (K / M / B)", "value": "auto" },
+                            { "displayName": "Nenhum (número completo)", "value": "none" },
+                            { "displayName": "Milhar (K)", "value": "K" },
+                            { "displayName": "Milhão (M)", "value": "M" },
+                            { "displayName": "Bilhão (B)", "value": "B" }
+                        ]
+                    }
+                },
+                "dateDisplayFormat": {
+                    "type": {
+                        "enumeration": [
+                            { "displayName": "Curto (dd/MM/yy)", "value": "short" },
+                            { "displayName": "Médio (dd/MM/yyyy)", "value": "medium" },
+                            { "displayName": "Longo (D de Mês de AAAA)", "value": "long" },
+                            { "displayName": "Relativo (há 3 dias…)", "value": "relative" }
+                        ]
+                    }
+                }
+            }
+        },
+        "financialStyle": {
+            "properties": {
+                "financialPositiveColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "financialNegativeColor": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "financialHierarchyIndent": {
+                    "type": { "numeric": true }
+                }
+            }
+        },
+        "editorState": {
+            "properties": {
+                "configJson": {
+                    "type": { "text": true }
+                }
+            }
         }
     },
     "dataViewMappings": [
@@ -241,5 +308,6 @@
         }
     ],
     "keepAllMetadataColumns": true,
+    "advancedEditModeSupport": 2,
     "privileges": []
 }

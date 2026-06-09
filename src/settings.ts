@@ -41,9 +41,24 @@ const AGGREGATION_ITEMS: powerbi.IEnumMember[] = [
 ];
 
 const MODE_ITEMS: powerbi.IEnumMember[] = [
-    { displayName: "Tabela (Grid)", value: "table" },
-    { displayName: "Matriz (Pivot)", value: "matrix" },
-    { displayName: "Financeira (DFC / DRE)", value: "financial" }
+    { displayName: "Geral (Grid / Competitors)", value: "general" },
+    { displayName: "Financeiro (DRE / P&L / DFC)", value: "financial" },
+    { displayName: "Matriz (Pivot)", value: "matrix" }
+];
+
+const NUMBER_SCALE_ITEMS: powerbi.IEnumMember[] = [
+    { displayName: "Automático (K / M / B)", value: "auto" },
+    { displayName: "Nenhum (número completo)", value: "none" },
+    { displayName: "Milhar (K)", value: "K" },
+    { displayName: "Milhão (M)", value: "M" },
+    { displayName: "Bilhão (B)", value: "B" }
+];
+
+const DATE_FORMAT_ITEMS: powerbi.IEnumMember[] = [
+    { displayName: "Curto  (dd/MM/yy)", value: "short" },
+    { displayName: "Médio  (dd/MM/yyyy)", value: "medium" },
+    { displayName: "Longo  (D de Mês de AAAA)", value: "long" },
+    { displayName: "Relativo  (há 3 dias…)", value: "relative" }
 ];
 
 // ─── Card: Aparência & Tema ────────────────────────────────────────────────
@@ -387,6 +402,100 @@ class TotalsStyleCard extends FormattingSettingsCard {
     ];
 }
 
+// ─── Card: Modo & Dashboard de Linhas ────────────────────────────────────────
+
+class TableModeCard extends FormattingSettingsCard {
+    tableMode = new formattingSettings.ItemDropdown({
+        name: "tableMode",
+        displayName: "Modo da tabela",
+        items: MODE_ITEMS,
+        value: MODE_ITEMS[0]
+    });
+
+    showFilterChips = new formattingSettings.ToggleSwitch({
+        name: "showFilterChips",
+        displayName: "Barra de filtros rápidos (chips)",
+        value: false
+    });
+
+    enableRowDashboard = new formattingSettings.ToggleSwitch({
+        name: "enableRowDashboard",
+        displayName: "Dashboard expansível por linha",
+        value: false
+    });
+
+    financialTabsInput = new formattingSettings.TextInput({
+        name: "financialTabsInput",
+        displayName: "Abas (modo financeiro, separe com ;)",
+        placeholder: "DRE; Balanço; Fluxo de Caixa",
+        value: ""
+    });
+
+    name: string = "tableModeCard";
+    displayName: string = "🗂️ Modo & Dashboard";
+    slices: Array<FormattingSettingsSlice> = [
+        this.tableMode,
+        this.showFilterChips,
+        this.enableRowDashboard,
+        this.financialTabsInput
+    ];
+}
+
+// ─── Card: Formato de Números & Datas ────────────────────────────────────────
+
+class NumberFormatCard extends FormattingSettingsCard {
+    numberScaleMode = new formattingSettings.ItemDropdown({
+        name: "numberScaleMode",
+        displayName: "Escala de números",
+        items: NUMBER_SCALE_ITEMS,
+        value: NUMBER_SCALE_ITEMS[0]
+    });
+
+    dateDisplayFormat = new formattingSettings.ItemDropdown({
+        name: "dateDisplayFormat",
+        displayName: "Formato de data",
+        items: DATE_FORMAT_ITEMS,
+        value: DATE_FORMAT_ITEMS[1]
+    });
+
+    name: string = "numberFormat";
+    displayName: string = "🔢 Números & Datas";
+    slices: Array<FormattingSettingsSlice> = [
+        this.numberScaleMode,
+        this.dateDisplayFormat
+    ];
+}
+
+// ─── Card: Estilo Financeiro ──────────────────────────────────────────────────
+
+class FinancialStyleCard extends FormattingSettingsCard {
+    financialPositiveColor = new formattingSettings.ColorPicker({
+        name: "financialPositiveColor",
+        displayName: "Cor positiva (variância +)",
+        value: { value: "#16a34a" }
+    });
+
+    financialNegativeColor = new formattingSettings.ColorPicker({
+        name: "financialNegativeColor",
+        displayName: "Cor negativa (variância −)",
+        value: { value: "#dc2626" }
+    });
+
+    financialHierarchyIndent = new formattingSettings.NumUpDown({
+        name: "financialHierarchyIndent",
+        displayName: "Recuo hierárquico (px por nível)",
+        value: 16
+    });
+
+    name: string = "financialStyle";
+    displayName: string = "💰 Estilo Financeiro";
+    slices: Array<FormattingSettingsSlice> = [
+        this.financialPositiveColor,
+        this.financialNegativeColor,
+        this.financialHierarchyIndent
+    ];
+}
+
 // ─── Layout & Dimensões ────────────────────────────────────────────────────
 
 class LayoutCard extends FormattingSettingsCard {
@@ -424,26 +533,50 @@ class LayoutCard extends FormattingSettingsCard {
     ];
 }
 
+// ─── Card: Editor State (persists IEditorConfig as JSON) ──────────────────────
+
+class EditorStateCard extends FormattingSettingsCard {
+    configJson = new formattingSettings.TextInput({
+        name: "configJson",
+        displayName: "Config JSON",
+        description: "Configuração gerenciada pelo editor visual (não editar manualmente)",
+        placeholder: "{}",
+        value: ""
+    });
+
+    name: string = "editorState";
+    displayName: string = "Editor Visual";
+    slices: Array<FormattingSettingsSlice> = [this.configJson];
+}
+
 // ─── Model ─────────────────────────────────────────────────────────────────
 
 export class VisualFormattingSettingsModel extends FormattingSettingsModel {
     tableAppearanceBasicsCard = new TableAppearanceBasicsCard();
     columnsIconsCard = new ColumnsIconsCard();
+    tableModeCard = new TableModeCard();
     tableFeaturesCard = new TableFeaturesCard();
     calculatedRowsCard = new CalculatedRowsCard();
+    numberFormatCard = new NumberFormatCard();
+    financialStyleCard = new FinancialStyleCard();
     layoutCard = new LayoutCard();
     colorsAndBordersCard = new ColorsAndBordersCard();
     groupingStyleCard = new GroupingStyleCard();
     totalsStyleCard = new TotalsStyleCard();
+    editorStateCard = new EditorStateCard();
 
     cards = [
         this.tableAppearanceBasicsCard,
+        this.tableModeCard,
         this.columnsIconsCard,
         this.tableFeaturesCard,
         this.calculatedRowsCard,
+        this.numberFormatCard,
+        this.financialStyleCard,
         this.layoutCard,
         this.colorsAndBordersCard,
         this.groupingStyleCard,
-        this.totalsStyleCard
+        this.totalsStyleCard,
+        this.editorStateCard
     ];
 }

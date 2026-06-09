@@ -14,6 +14,10 @@ import DataView = powerbi.DataView;
 import { VisualFormattingSettingsModel } from "./settings";
 import { AdvancedModernTable } from "./advanced-table";
 import { IAdvancedColumn, IAdvancedRow, IAdvancedTableConfig } from "./types";
+import { VisualEditor, IEditorConfig, defaultEditorConfig } from "./visual-editor";
+import { buildCalculatedRows } from "./formula-engine";
+
+import EditMode = powerbi.EditMode;
 
 type DataType = IAdvancedColumn["dataType"];
 
@@ -28,6 +32,8 @@ export class Visual implements IVisual {
     private formattingSettingsService: FormattingSettingsService;
     private table: AdvancedModernTable;
     private hasRenderedOnce: boolean = false;
+    private editorConfig: IEditorConfig = defaultEditorConfig();
+    private lastExtracted: { columns: IAdvancedColumn[]; rows: IAdvancedRow[] } = { columns: [], rows: [] };
 
     constructor(options: VisualConstructorOptions) {
         this.formattingSettingsService = new FormattingSettingsService();
@@ -38,6 +44,12 @@ export class Visual implements IVisual {
 
     public update(options: VisualUpdateOptions) {
         try {
+            // ─── Advanced Edit Mode (Mais Opções → Editar) ────────────────────
+            if (options.editMode === EditMode.Advanced) {
+                this.renderEditorMode(options);
+                return;
+            }
+
             // Dimensionamento: o Power BI entrega o tamanho exato do container.
             // Esta é a base de layout; tableWidthPx/tableHeightPx são overrides.
             const viewport = options.viewport;
@@ -78,7 +90,10 @@ export class Visual implements IVisual {
 
             const columnsIconsConfig = this.formattingSettings?.columnsIconsCard;
             const tableFeaturesConfig = this.formattingSettings?.tableFeaturesCard;
+            const tableModeConfig = this.formattingSettings?.tableModeCard;
             const calculatedRowsConfig = this.formattingSettings?.calculatedRowsCard;
+            const numberFormatConfig = this.formattingSettings?.numberFormatCard;
+            const financialStyleConfig = this.formattingSettings?.financialStyleCard;
             const layoutConfig = this.formattingSettings?.layoutCard;
             const colorsAndBordersConfig = this.formattingSettings?.colorsAndBordersCard;
             const groupingStyleConfig = this.formattingSettings?.groupingStyleCard;
@@ -111,7 +126,11 @@ export class Visual implements IVisual {
                 } catch (e) { console.warn("debug snapshot failed:", e); }
             }
 
+            // Load editor config persisted from the editor panel
+            this.editorConfig = this.loadEditorConfig(dataView);
+
             const extracted = this.getRenderableData(dataView);
+            this.lastExtracted = extracted;
 
             // ─── DEBUG: log extraction result ─────────────────────────────────
             if (DEBUG) {
@@ -127,7 +146,10 @@ export class Visual implements IVisual {
             const config = this.buildTableConfig(
                 columnsIconsConfig,
                 tableFeaturesConfig,
+                tableModeConfig,
                 calculatedRowsConfig,
+                numberFormatConfig,
+                financialStyleConfig,
                 layoutConfig,
                 tableAppearanceBasicsConfig,
                 colorsAndBordersConfig,
@@ -135,9 +157,12 @@ export class Visual implements IVisual {
                 totalsStyleConfig
             );
 
+            const finalColumns = this.applyEditorColumnOverrides(extracted.columns);
+            const finalRows    = this.applyEditorCalculatedRows(finalColumns, extracted.rows);
+
             this.table.updateConfig(config);
-            this.table.setColumns(extracted.columns);
-            this.table.setData(extracted.rows);
+            this.table.setColumns(finalColumns);
+            this.table.setData(finalRows);
             this.table.render();
             this.hasRenderedOnce = true;
 
@@ -179,6 +204,120 @@ export class Visual implements IVisual {
         wrap.appendChild(title);
         wrap.appendChild(hint);
         this.target.appendChild(wrap);
+    }
+
+    // ─── Advanced Edit Mode (side-panel: table on left, editor on right) ─────
+
+    private renderEditorMode(options: VisualUpdateOptions): void {
+        if (options.dataViews && options.dataViews.length > 0) {
+            this.formattingSettings = this.formattingSettingsService.populateFormattingSettingsModel(
+                VisualFormattingSettingsModel,
+                options.dataViews[0]
+            );
+            this.editorConfig = this.loadEditorConfig(options.dataViews[0]);
+            this.lastExtracted = this.getRenderableData(options.dataViews[0]);
+        }
+
+        // Wrapper: flex row — table preview left, editor panel right
+        this.target.innerHTML = "";
+        this.target.style.cssText = "display:flex;flex-direction:row;width:100%;height:100%;overflow:hidden;";
+
+        // Left: live table preview (takes remaining space)
+        const tablePane = document.createElement("div");
+        tablePane.style.cssText = "flex:1 1 0;min-width:0;height:100%;overflow:hidden;position:relative;";
+        this.target.appendChild(tablePane);
+
+        // Rebuild table inside the preview pane
+        this.table = new AdvancedModernTable(tablePane, {}, (s) => this.persistOnObjectState(s), this.host);
+        if (options.viewport) this.table.setViewport(options.viewport.width * 0.58, options.viewport.height);
+
+        const refreshPreview = () => {
+            const finalColumns = this.applyEditorColumnOverrides(this.lastExtracted.columns);
+            const finalRows    = this.applyEditorCalculatedRows(finalColumns, this.lastExtracted.rows);
+            const config       = this.buildTableConfig(
+                this.formattingSettings?.columnsIconsCard,
+                this.formattingSettings?.tableFeaturesCard,
+                this.formattingSettings?.tableModeCard,
+                this.formattingSettings?.calculatedRowsCard,
+                this.formattingSettings?.numberFormatCard,
+                this.formattingSettings?.financialStyleCard,
+                this.formattingSettings?.layoutCard,
+                this.formattingSettings?.tableAppearanceBasicsCard,
+                this.formattingSettings?.colorsAndBordersCard,
+                this.formattingSettings?.groupingStyleCard,
+                this.formattingSettings?.totalsStyleCard
+            );
+            this.table.updateConfig(config);
+            this.table.setColumns(finalColumns);
+            this.table.setData(finalRows);
+            this.table.render();
+        };
+        refreshPreview();
+
+        // Right: editor panel (fixed 380px)
+        const editorPane = document.createElement("div");
+        editorPane.style.cssText = "width:380px;flex-shrink:0;height:100%;border-left:1px solid #e2e8f0;overflow:hidden;";
+        this.target.appendChild(editorPane);
+
+        const editor = new VisualEditor(
+            editorPane,
+            this.editorConfig,
+            this.lastExtracted.columns,
+            (cfg) => {
+                this.editorConfig = cfg;
+                this.saveEditorConfig(cfg);
+                refreshPreview();  // live update table on save
+            },
+            () => {
+                // Cancel: restore normal full-width layout
+                this.target.style.cssText = "";
+                this.target.innerHTML = "";
+                this.table = new AdvancedModernTable(this.target, {}, (s) => this.persistOnObjectState(s), this.host);
+                this.hasRenderedOnce = false;
+            }
+        );
+        editor.render();
+    }
+
+    private loadEditorConfig(dataView: DataView): IEditorConfig {
+        const raw = (dataView as any)?.metadata?.objects?.editorState?.configJson;
+        if (typeof raw === "string" && raw.length > 0) {
+            try { return { ...defaultEditorConfig(), ...JSON.parse(raw) }; } catch { /* fall through */ }
+        }
+        return defaultEditorConfig();
+    }
+
+    private saveEditorConfig(cfg: IEditorConfig): void {
+        this.host.persistProperties({
+            merge: [{
+                objectName: "editorState",
+                selector: undefined as any,
+                properties: { configJson: JSON.stringify(cfg) }
+            }]
+        });
+    }
+
+    private applyEditorColumnOverrides(columns: IAdvancedColumn[]): IAdvancedColumn[] {
+        const overrides = this.editorConfig.columnOverrides;
+        if (!overrides || Object.keys(overrides).length === 0) return columns;
+        return columns.map(col => {
+            const ov = overrides[col.name];
+            if (!ov) return col;
+            return {
+                ...col,
+                displayName: ov.displayName || col.displayName,
+                cellStyle: (ov.cellStyle && ov.cellStyle !== "default" ? ov.cellStyle : col.cellStyle) as IAdvancedColumn["cellStyle"],
+                alignment: (ov.align || col.alignment) as IAdvancedColumn["alignment"],
+                width: ov.width || col.width,
+            };
+        });
+    }
+
+    private applyEditorCalculatedRows(columns: IAdvancedColumn[], rows: IAdvancedRow[]): IAdvancedRow[] {
+        const defs = this.editorConfig.calculatedRows;
+        if (!defs || defs.length === 0) return rows;
+        const calcRows = buildCalculatedRows(defs, columns, rows);
+        return [...rows, ...calcRows];
     }
 
     private persistOnObjectState(state: string): void {
@@ -286,7 +425,10 @@ export class Visual implements IVisual {
     private buildTableConfig(
         columnsIconsConfig: any,
         tableFeaturesConfig: any,
+        tableModeConfig: any,
         calculatedRowsConfig: any,
+        numberFormatConfig: any,
+        financialStyleConfig: any,
         layoutConfig: any,
         appearanceBasicsConfig: any,
         colorsAndBordersConfig: any,
@@ -418,6 +560,34 @@ export class Visual implements IVisual {
             enableAnalyticsCellVisuals: tableFeaturesConfig?.enableAnalyticsCellVisuals?.value === true,
 
             enableConditionalFormatting: tableFeaturesConfig?.enableConditionalFormatting?.value === true,
+
+            // Table mode & dashboard
+            tableMode: ((): IAdvancedTableConfig["tableMode"] => {
+                const raw = this.getEnumSelectionValue(tableModeConfig?.tableMode?.value, "general");
+                return (["general", "financial", "matrix"].includes(raw) ? raw : "general") as IAdvancedTableConfig["tableMode"];
+            })(),
+            showFilterChips: tableModeConfig?.showFilterChips?.value === true,
+            enableRowDashboard: tableModeConfig?.enableRowDashboard?.value === true,
+            financialTabs: (() => {
+                const raw = String(tableModeConfig?.financialTabsInput?.value ?? "").trim();
+                return raw ? raw.split(";").map((s: string) => s.trim()).filter(Boolean) : [];
+            })(),
+            financialActiveTab: 0,
+
+            // Number & date formatting
+            numberScaleMode: ((): IAdvancedTableConfig["numberScaleMode"] => {
+                const raw = this.getEnumSelectionValue(numberFormatConfig?.numberScaleMode?.value, "auto");
+                return (["auto", "none", "K", "M", "B"].includes(raw) ? raw : "auto") as IAdvancedTableConfig["numberScaleMode"];
+            })(),
+            dateDisplayFormat: ((): IAdvancedTableConfig["dateDisplayFormat"] => {
+                const raw = this.getEnumSelectionValue(numberFormatConfig?.dateDisplayFormat?.value, "medium");
+                return (["short", "medium", "long", "relative"].includes(raw) ? raw : "medium") as IAdvancedTableConfig["dateDisplayFormat"];
+            })(),
+
+            // Financial style
+            financialPositiveColor: financialStyleConfig?.financialPositiveColor?.value?.value ?? "#16a34a",
+            financialNegativeColor: financialStyleConfig?.financialNegativeColor?.value?.value ?? "#dc2626",
+            financialHierarchyIndent: financialStyleConfig?.financialHierarchyIndent?.value ?? 16,
         };
     }
 

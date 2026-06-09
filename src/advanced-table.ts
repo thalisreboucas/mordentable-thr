@@ -90,6 +90,11 @@ export class AdvancedModernTable {
     private viewportWidth: number = 0;
     private viewportHeight: number = 0;
 
+    // Row dashboard expand state
+    private expandedDashboardRows: Set<string | number> = new Set();
+    // Financial tab active index
+    private financialActiveTab: number = 0;
+
     constructor(
         container: HTMLElement,
         config: Partial<IAdvancedTableConfig> = {},
@@ -159,6 +164,16 @@ export class AdvancedModernTable {
             showRowNumbers: false,
             enableRowSelection: false,
             enableAnalyticsCellVisuals: false,
+            tableMode: "general",
+            showFilterChips: false,
+            enableRowDashboard: false,
+            numberScaleMode: "auto",
+            dateDisplayFormat: "medium",
+            financialPositiveColor: "#16a34a",
+            financialNegativeColor: "#dc2626",
+            financialHierarchyIndent: 16,
+            financialTabs: [],
+            financialActiveTab: 0,
             ...overrides
         };
     }
@@ -995,6 +1010,406 @@ export class AdvancedModernTable {
         td.appendChild(badge);
     }
 
+    // ─── Variance Cell ────────────────────────────────────────────────────────
+
+    private appendVarianceCell(td: HTMLElement, value: any, formatted: string): void {
+        td.classList.add("mt-td-variance");
+        const n = typeof value === "number" ? value : Number(String(value).replace(/[^0-9,.-]/g, "").replace(",", "."));
+        const isNum = !isNaN(n);
+
+        const wrap = document.createElement("div");
+        wrap.className = "mt-variance-wrap";
+
+        const val = document.createElement("span");
+        val.className = "mt-variance-value";
+        val.textContent = formatted;
+
+        if (isNum) {
+            if (n > 0) {
+                val.classList.add("mt-variance-positive");
+                val.style.color = this.config.financialPositiveColor || "#16a34a";
+            } else if (n < 0) {
+                val.classList.add("mt-variance-negative");
+                val.style.color = this.config.financialNegativeColor || "#dc2626";
+            } else {
+                val.classList.add("mt-variance-neutral");
+            }
+        }
+
+        const arrow = document.createElement("span");
+        arrow.className = "mt-variance-arrow";
+        if (isNum) {
+            if (n > 0) { arrow.textContent = "↑"; arrow.style.color = this.config.financialPositiveColor || "#16a34a"; }
+            else if (n < 0) { arrow.textContent = "↓"; arrow.style.color = this.config.financialNegativeColor || "#dc2626"; }
+            else { arrow.textContent = "–"; }
+        }
+
+        wrap.appendChild(val);
+        if (isNum) wrap.appendChild(arrow);
+        td.appendChild(wrap);
+    }
+
+    // ─── Score Cell ───────────────────────────────────────────────────────────
+
+    private appendScoreCell(td: HTMLElement, value: any, formatted: string): void {
+        td.classList.add("mt-td-score");
+        const n = typeof value === "number" ? value : parseFloat(String(value));
+
+        const wrap = document.createElement("div");
+        wrap.className = "mt-score-wrap";
+
+        const numEl = document.createElement("span");
+        numEl.className = "mt-score-num";
+        numEl.textContent = isNaN(n) ? formatted : String(Math.round(n));
+
+        const grade = isNaN(n) ? "" : n >= 90 ? "A" : n >= 80 ? "B" : n >= 70 ? "C" : n >= 60 ? "D" : "F";
+        const gradeBg = n >= 90 ? "#16a34a" : n >= 80 ? "#2563eb" : n >= 70 ? "#d97706" : n >= 60 ? "#ea580c" : "#dc2626";
+
+        const gradeEl = document.createElement("span");
+        gradeEl.className = "mt-score-grade";
+        gradeEl.textContent = grade;
+        gradeEl.style.backgroundColor = gradeBg;
+
+        wrap.appendChild(numEl);
+        if (grade) wrap.appendChild(gradeEl);
+        td.appendChild(wrap);
+    }
+
+    // ─── Multi-Chip Cell ──────────────────────────────────────────────────────
+
+    private appendMultiChipCell(td: HTMLElement, value: any): void {
+        td.classList.add("mt-td-multichip");
+        const raw = String(value ?? "");
+        const parts = raw.split(/[;,|]/).map(s => s.trim()).filter(Boolean);
+
+        const wrap = document.createElement("div");
+        wrap.className = "mt-multichip-wrap";
+
+        parts.forEach(part => {
+            const chip = document.createElement("span");
+            chip.className = "mt-chip";
+            const colors = getBadgeColors(part, "soft");
+            chip.style.backgroundColor = colors.bg;
+            chip.style.color = colors.color;
+            chip.textContent = part;
+            wrap.appendChild(chip);
+        });
+
+        if (!parts.length) td.textContent = raw;
+        else td.appendChild(wrap);
+    }
+
+    // ─── Flag Cell ────────────────────────────────────────────────────────────
+
+    private appendFlagCell(td: HTMLElement, value: any): void {
+        td.classList.add("mt-td-flag");
+        const raw = String(value ?? "").trim().toUpperCase();
+
+        // Country code to flag emoji (regional indicator symbols)
+        const toFlag = (code: string): string => {
+            if (code.length !== 2) return "";
+            const base = 0x1F1E6 - 65;
+            return String.fromCodePoint(base + code.charCodeAt(0)) + String.fromCodePoint(base + code.charCodeAt(1));
+        };
+
+        const wrap = document.createElement("div");
+        wrap.className = "mt-flag-wrap";
+
+        const flag = document.createElement("span");
+        flag.className = "mt-flag-emoji";
+        flag.textContent = toFlag(raw) || "🌐";
+
+        const code = document.createElement("span");
+        code.className = "mt-flag-code";
+        code.textContent = raw || String(value ?? "");
+
+        wrap.appendChild(flag);
+        wrap.appendChild(code);
+        td.appendChild(wrap);
+    }
+
+    // ─── Row Dashboard Panel ──────────────────────────────────────────────────
+
+    private createDashboardPanel(row: IAdvancedRow, autoColumnWidths: Map<string, number>): HTMLElement {
+        const panel = document.createElement("div");
+        panel.className = "mt-dashboard-panel";
+        panel.setAttribute("data-dashboard-for", String(row.id));
+
+        const inner = document.createElement("div");
+        inner.className = "mt-dashboard-inner";
+
+        // Metrics section
+        const numericCols = this.getRenderableColumns().filter(c =>
+            (c.dataType === "number" || c.dataType === "currency" || c.dataType === "percentage")
+            && typeof row.values[c.index] === "number"
+        );
+
+        if (numericCols.length > 0) {
+            const metricsSection = document.createElement("div");
+            metricsSection.className = "mt-dashboard-metrics";
+
+            const metricsTitle = document.createElement("div");
+            metricsTitle.className = "mt-dashboard-section-title";
+            metricsTitle.textContent = "Métricas";
+            metricsSection.appendChild(metricsTitle);
+
+            const cards = document.createElement("div");
+            cards.className = "mt-dashboard-cards";
+
+            numericCols.slice(0, 6).forEach(col => {
+                const val = row.values[col.index] as number;
+                const card = document.createElement("div");
+                card.className = "mt-dashboard-card";
+
+                const label = document.createElement("span");
+                label.className = "mt-dashboard-card-label";
+                label.textContent = col.displayName;
+
+                const valEl = document.createElement("span");
+                valEl.className = "mt-dashboard-card-value";
+                valEl.textContent = this.formatCellValue(val, col);
+
+                // Trend indicator based on stats
+                const stats = this.dataBarStats.get(col.name);
+                if (stats) {
+                    const pct = (val - stats.min) / (stats.max - stats.min || 1);
+                    const bar = document.createElement("div");
+                    bar.className = "mt-dashboard-card-bar";
+                    const fill = document.createElement("div");
+                    fill.className = "mt-dashboard-card-bar-fill";
+                    fill.style.width = `${Math.round(pct * 100)}%`;
+                    bar.appendChild(fill);
+                    card.appendChild(label);
+                    card.appendChild(valEl);
+                    card.appendChild(bar);
+                } else {
+                    card.appendChild(label);
+                    card.appendChild(valEl);
+                }
+
+                cards.appendChild(card);
+            });
+
+            metricsSection.appendChild(cards);
+            inner.appendChild(metricsSection);
+        }
+
+        // Sparkline section using all numeric columns as data points
+        const sparkData = numericCols.slice(0, 24).map(c => row.values[c.index] as number).filter(v => !isNaN(v));
+        if (sparkData.length >= 2) {
+            const sparkSection = document.createElement("div");
+            sparkSection.className = "mt-dashboard-sparkline-section";
+
+            const sparkTitle = document.createElement("div");
+            sparkTitle.className = "mt-dashboard-section-title";
+            sparkTitle.textContent = "Tendência";
+            sparkSection.appendChild(sparkTitle);
+
+            const sparkEl = document.createElement("div");
+            sparkEl.className = "mt-dashboard-sparkline";
+            this.appendEnhancedSparkline(sparkEl, sparkData, numericCols.slice(0, 24).map(c => c.displayName));
+            sparkSection.appendChild(sparkEl);
+            inner.appendChild(sparkSection);
+        }
+
+        // User-defined metrics (from row.dashboardMetrics)
+        if (row.dashboardMetrics && row.dashboardMetrics.length > 0) {
+            const userSection = document.createElement("div");
+            userSection.className = "mt-dashboard-user-metrics";
+            row.dashboardMetrics.forEach(m => {
+                const item = document.createElement("div");
+                item.className = "mt-dashboard-metric-item";
+                const lbl = document.createElement("span");
+                lbl.className = "mt-dashboard-metric-label";
+                lbl.textContent = m.label;
+                const vEl = document.createElement("span");
+                vEl.className = "mt-dashboard-metric-value";
+                vEl.textContent = String(m.value ?? "–");
+                if (m.trend === "up") vEl.classList.add("mt-dashboard-metric-up");
+                else if (m.trend === "down") vEl.classList.add("mt-dashboard-metric-down");
+                item.appendChild(lbl);
+                item.appendChild(vEl);
+                userSection.appendChild(item);
+            });
+            inner.appendChild(userSection);
+        }
+
+        panel.appendChild(inner);
+        return panel;
+    }
+
+    // ─── Enhanced Sparkline (with axis labels) ───────────────────────────────
+
+    private appendEnhancedSparkline(container: HTMLElement, data: number[], labels?: string[]): void {
+        const min = Math.min(...data);
+        const max = Math.max(...data);
+        const denom = max - min || 1;
+
+        const chart = document.createElement("div");
+        chart.className = "mt-enhanced-sparkline";
+
+        const barsWrap = document.createElement("div");
+        barsWrap.className = "mt-enhanced-sparkline-bars";
+
+        data.forEach((point, i) => {
+            const barWrap = document.createElement("div");
+            barWrap.className = "mt-enhanced-sparkline-col";
+
+            const bar = document.createElement("div");
+            bar.className = "mt-enhanced-sparkline-bar";
+            const normalized = (point - min) / denom;
+            bar.style.height = `${Math.round(normalized * 100)}%`;
+
+            // Tooltip on hover
+            if (labels && labels[i]) {
+                barWrap.title = `${labels[i]}: ${point}`;
+            }
+
+            barWrap.appendChild(bar);
+            barsWrap.appendChild(barWrap);
+        });
+
+        chart.appendChild(barsWrap);
+
+        // Min/max labels
+        const axisWrap = document.createElement("div");
+        axisWrap.className = "mt-enhanced-sparkline-axis";
+        const minEl = document.createElement("span");
+        minEl.textContent = String(min);
+        const maxEl = document.createElement("span");
+        maxEl.textContent = String(max);
+        axisWrap.appendChild(minEl);
+        axisWrap.appendChild(maxEl);
+        chart.appendChild(axisWrap);
+
+        container.appendChild(chart);
+    }
+
+    // ─── Filter Chips Toolbar ─────────────────────────────────────────────────
+
+    private renderFilterChips(): void {
+        const bar = document.createElement("div");
+        bar.className = "mt-filter-chips-bar";
+
+        const filterableCols = this.getRenderableColumns().filter(c => c.filterable);
+
+        filterableCols.forEach(col => {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "mt-filter-chip";
+            chip.setAttribute("data-col", col.name);
+
+            const activeFilter = this.config.filters.get(col.name);
+            const hasFilter = !!activeFilter;
+            if (hasFilter) chip.classList.add("mt-filter-chip-active");
+
+            const iconEl = document.createElement("span");
+            iconEl.className = "mt-filter-chip-icon";
+            iconEl.textContent = col.dataType === "date" ? "📅"
+                : col.dataType === "number" || col.dataType === "currency" ? "#"
+                : col.dataType === "percentage" ? "%"
+                : "T";
+
+            const labelEl = document.createElement("span");
+            labelEl.className = "mt-filter-chip-label";
+            labelEl.textContent = col.displayName;
+
+            const valueEl = document.createElement("span");
+            valueEl.className = "mt-filter-chip-value";
+            if (hasFilter) {
+                if (typeof activeFilter === "string") valueEl.textContent = activeFilter;
+                else if (activeFilter && "min" in activeFilter && activeFilter.min != null) valueEl.textContent = `≥ ${activeFilter.min}`;
+                else if (activeFilter && "in" in activeFilter) valueEl.textContent = `${activeFilter.in.length} sel.`;
+                else if (activeFilter && "op" in activeFilter) valueEl.textContent = activeFilter.value;
+            }
+
+            const arrowEl = document.createElement("span");
+            arrowEl.className = "mt-filter-chip-arrow";
+            arrowEl.textContent = "▾";
+
+            if (hasFilter) {
+                const clearBtn = document.createElement("button");
+                clearBtn.type = "button";
+                clearBtn.className = "mt-filter-chip-clear";
+                clearBtn.textContent = "✕";
+                clearBtn.title = "Limpar filtro";
+                clearBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    this.config.filters.delete(col.name);
+                    this.config.currentPage = 1;
+                    this.applyFilters();
+                    this.render();
+                });
+                chip.appendChild(iconEl);
+                chip.appendChild(labelEl);
+                if (hasFilter) chip.appendChild(valueEl);
+                chip.appendChild(clearBtn);
+            } else {
+                chip.appendChild(iconEl);
+                chip.appendChild(labelEl);
+                chip.appendChild(arrowEl);
+            }
+
+            // Open filter panel on click
+            chip.addEventListener("click", (e) => {
+                e.stopPropagation();
+                // Find the actual header cell for this column to anchor the panel
+                const headerCell = this.container.querySelector(`.mt-th[data-col="${col.name}"]`);
+                if (headerCell) {
+                    const filterBtn = headerCell.querySelector(".mt-filter-btn") as HTMLElement;
+                    if (filterBtn) {
+                        filterBtn.click();
+                        return;
+                    }
+                }
+                this.openFilterPanel(col, chip);
+            });
+
+            bar.appendChild(chip);
+        });
+
+        // Clear all button
+        if (this.config.filters.size > 0) {
+            const clearAll = document.createElement("button");
+            clearAll.type = "button";
+            clearAll.className = "mt-filter-chip mt-filter-chip-clear-all";
+            clearAll.textContent = "✕ Limpar todos";
+            clearAll.addEventListener("click", () => {
+                this.clearAllFilters();
+                this.render();
+            });
+            bar.appendChild(clearAll);
+        }
+
+        this.container.appendChild(bar);
+    }
+
+    // ─── Financial Tabs ───────────────────────────────────────────────────────
+
+    private renderFinancialTabs(): void {
+        if (!this.config.financialTabs || this.config.financialTabs.length <= 1) return;
+
+        const tabBar = document.createElement("div");
+        tabBar.className = "mt-financial-tabs";
+
+        this.config.financialTabs.forEach((label, idx) => {
+            const tab = document.createElement("button");
+            tab.type = "button";
+            tab.className = "mt-financial-tab";
+            if (idx === this.financialActiveTab) tab.classList.add("mt-financial-tab-active");
+            tab.textContent = label;
+            tab.addEventListener("click", () => {
+                this.financialActiveTab = idx;
+                this.config.financialActiveTab = idx;
+                // Filter rows by financialSection matching tab label
+                this.render();
+            });
+            tabBar.appendChild(tab);
+        });
+
+        this.container.appendChild(tabBar);
+    }
+
     // ─── Main Render ──────────────────────────────────────────────────────────
 
     public render(): void {
@@ -1014,7 +1429,18 @@ export class AdvancedModernTable {
 
         this.applyThemeVariables();
 
+        // Financial tabs before toolbar
+        if (this.config.tableMode === "financial" && this.config.financialTabs.length > 1) {
+            this.renderFinancialTabs();
+        }
+
         this.renderQuickActionsToolbar();
+
+        // Filter chips toolbar (below quick search bar)
+        if (this.config.showFilterChips) {
+            this.renderFilterChips();
+        }
+
         this.recomputeAutoColumnWidths();
 
         const wrapper = document.createElement("div");
@@ -1114,75 +1540,6 @@ export class AdvancedModernTable {
             this.container.appendChild(bar);
         }
 
-        // (2) Engrenagem flutuante de personalização (canto inferior-direito).
-        // Fica oculta e só aparece ao passar o mouse no visual; abre um popover
-        // com os atalhos de aparência. Sai da linha de leitura do topo.
-        const wrap = document.createElement("div");
-        wrap.className = "mt-fab-wrap";
-        wrap.classList.toggle("mt-fab-open", !this.toolbarCollapsed);
-
-        const gearBtn = document.createElement("button");
-        gearBtn.type = "button";
-        gearBtn.className = "mt-fab";
-        gearBtn.setAttribute("aria-label", "Personalizar tabela");
-        gearBtn.setAttribute("aria-expanded", String(!this.toolbarCollapsed));
-        gearBtn.title = "Personalizar tabela";
-        gearBtn.textContent = "⚙";
-
-        const pop = document.createElement("div");
-        pop.className = "mt-fab-popover";
-        pop.setAttribute("role", "menu");
-
-        const popTitle = document.createElement("div");
-        popTitle.className = "mt-fab-popover-title";
-        popTitle.textContent = "Personalizar";
-        pop.appendChild(popTitle);
-
-        // Atalhos de formatação rápida (glifo + rótulo legível)
-        const makeToggle = (glyph: string, label: string, active: boolean, onClick: () => void) => {
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = "mt-fab-toggle" + (active ? " mt-fab-toggle-active" : "");
-            btn.title = label;
-            const ic = document.createElement("span");
-            ic.className = "mt-fab-toggle-ic";
-            ic.textContent = glyph;
-            const tx = document.createElement("span");
-            tx.className = "mt-fab-toggle-tx";
-            tx.textContent = label;
-            btn.appendChild(ic);
-            btn.appendChild(tx);
-            btn.addEventListener("click", onClick);
-            return btn;
-        };
-
-        pop.appendChild(makeToggle("⌕", "Busca global", this.config.showQuickFilter, () => {
-            this.setPerformanceOverride("showQuickFilter", !this.config.showQuickFilter);
-        }));
-        pop.appendChild(makeToggle("⊟", "Filtros nas colunas", this.config.showHeaderFilter, () => {
-            this.setPerformanceOverride("showHeaderFilter", !this.config.showHeaderFilter);
-        }));
-        pop.appendChild(makeToggle("◈", "Ícones nas colunas", this.config.showColumnIcons, () => {
-            this.setPerformanceOverride("showColumnIcons", !this.config.showColumnIcons);
-        }));
-        pop.appendChild(makeToggle("▤", "Linhas alternadas", this.config.striped, () => {
-            this.setPerformanceOverride("striped", !this.config.striped);
-        }));
-        pop.appendChild(makeToggle("⊜", "Compacto", this.config.spacingMode === "compact", () => {
-            this.setPerformanceOverride("spacingMode",
-                this.config.spacingMode === "compact" ? "comfortable" : "compact");
-        }));
-
-        gearBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            this.toolbarCollapsed = !this.toolbarCollapsed;
-            wrap.classList.toggle("mt-fab-open", !this.toolbarCollapsed);
-            gearBtn.setAttribute("aria-expanded", String(!this.toolbarCollapsed));
-        });
-
-        wrap.appendChild(gearBtn);
-        wrap.appendChild(pop);
-        this.container.appendChild(wrap);
     }
 
     private renderGroupToolbar(): void {
@@ -1723,10 +2080,15 @@ export class AdvancedModernTable {
             return;
         }
 
-        const shouldVirtualize = !this.config.enablePagination && pagedRows.length > 150;
+        const shouldVirtualize = !this.config.enablePagination && pagedRows.length > 150
+            && !this.config.enableRowDashboard;
         if (!shouldVirtualize) {
             pagedRows.forEach((row, visIndex) => {
                 tbody.appendChild(this.createDataRow(row, visIndex, autoColumnWidths));
+                if (this.config.enableRowDashboard && this.expandedDashboardRows.has(row.id)
+                    && row.rowType !== "group" && row.rowType !== "subtotal" && !row.isSummary) {
+                    tbody.appendChild(this.createDashboardPanel(row, autoColumnWidths));
+                }
             });
             table.appendChild(tbody);
             return;
@@ -1864,6 +2226,30 @@ export class AdvancedModernTable {
             tr.style.cursor = "pointer";
         }
 
+        // Row dashboard expand button
+        if (this.config.enableRowDashboard && row.rowType !== "group" && row.rowType !== "subtotal" && !row.isSummary) {
+            const td = document.createElement("div");
+            td.className = "mt-td mt-td-dashboard-toggle";
+            td.setAttribute("role", "cell");
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "mt-dashboard-expand-btn";
+            const isExpanded = this.expandedDashboardRows.has(row.id);
+            btn.textContent = isExpanded ? "▾" : "▸";
+            btn.setAttribute("aria-label", isExpanded ? "Recolher detalhes" : "Expandir detalhes");
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                if (this.expandedDashboardRows.has(row.id)) {
+                    this.expandedDashboardRows.delete(row.id);
+                } else {
+                    this.expandedDashboardRows.add(row.id);
+                }
+                this.refreshBodyAndPagination();
+            });
+            td.appendChild(btn);
+            tr.appendChild(td);
+        }
+
         // Row number cell
         if (this.config.showRowNumbers) {
             const td = document.createElement("div");
@@ -1918,9 +2304,19 @@ export class AdvancedModernTable {
 
             // Conditional formatting
             const cfStyle = this.getConditionalStyle(row, col.index);
+            // Auto-detect variance columns in financial mode
+            const isVarianceCol = this.config.tableMode === "financial"
+                && !col.cellStyle
+                && /dif|var|delta|change|growth|%|percent/i.test(col.name);
+
             const resolvedStyle = col.cellStyle
+                || (isVarianceCol ? "variance" : null)
                 || (col.dataType === "percentage" || col.dataBar ? "progress" : "text");
             const useProgress = resolvedStyle === "progress";
+            const useVariance = resolvedStyle === "variance";
+            const useScore = resolvedStyle === "score";
+            const useMultiChip = resolvedStyle === "multichip";
+            const useFlag = resolvedStyle === "flag";
             const useBadge = resolvedStyle === "badge"
                 || !!(cfStyle.bg || cfStyle.color || cfStyle.bold || cfStyle.iconVariant);
 
@@ -1941,12 +2337,20 @@ export class AdvancedModernTable {
             if (col.fontFamily) td.style.fontFamily = col.fontFamily;
             if (col.fontSize) td.style.fontSize = `${col.fontSize}px`;
 
+            // Financial mode: indent first visible column based on hierarchy level
+            if (this.config.tableMode === "financial" && col === this.getRenderableColumns()[0]
+                && row.rowType !== "group") {
+                const lvl = row.hierarchyLevel ?? row.groupLevel ?? 0;
+                const indent = lvl * (this.config.financialHierarchyIndent || 16);
+                if (indent > 0) td.style.paddingLeft = `${indent + 12}px`;
+            }
+
             if (row.rowType === "group" && row.groupColumnIndex === col.index) {
                 td.classList.add("mt-group-cell");
 
                 const inner = document.createElement("div");
                 inner.className = "mt-group-cell-inner";
-                inner.style.paddingLeft = `${(row.groupLevel ?? 0) * 16}px`;
+                inner.style.paddingLeft = `${(row.groupLevel ?? 0) * (this.config.financialHierarchyIndent || 16)}px`;
 
                 const toggle = document.createElement("button");
                 toggle.type = "button";
@@ -1970,6 +2374,14 @@ export class AdvancedModernTable {
                     this.appendSparklineCell(td, this.resolveSparklineData(value, row, col));
                 } else if (this.config.enableAnalyticsCellVisuals && isFinanceMetricVisualColumn(col)) {
                     this.appendFinanceMetricCell(td, value, formatted);
+                } else if (useVariance) {
+                    this.appendVarianceCell(td, value, formatted);
+                } else if (useScore) {
+                    this.appendScoreCell(td, value, formatted);
+                } else if (useMultiChip) {
+                    this.appendMultiChipCell(td, value);
+                } else if (useFlag) {
+                    this.appendFlagCell(td, value);
                 } else if (useProgress && typeof value === "number") {
                     td.classList.add("mt-td-bar");
                     const pct = col.dataType === "percentage"
@@ -4177,6 +4589,45 @@ export class AdvancedModernTable {
         return { currency: "BRL", locale: "pt-BR" }; // default: Real (R$)
     }
 
+    private scaleNumber(n: number, decimals: number): string {
+        const mode = this.config.numberScaleMode ?? "auto";
+        const abs = Math.abs(n);
+        if (mode === "none") return n.toLocaleString("pt-BR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+        const useK = mode === "K" || (mode === "auto" && abs >= 1_000 && abs < 1_000_000);
+        const useM = mode === "M" || (mode === "auto" && abs >= 1_000_000 && abs < 1_000_000_000);
+        const useB = mode === "B" || (mode === "auto" && abs >= 1_000_000_000);
+        if (useB) return `${(n / 1_000_000_000).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}B`;
+        if (useM) return `${(n / 1_000_000).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}M`;
+        if (useK) return `${(n / 1_000).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}K`;
+        return n.toLocaleString("pt-BR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    }
+
+    private formatDateValue(d: Date): string {
+        const fmt = this.config.dateDisplayFormat ?? "medium";
+        switch (fmt) {
+            case "short":
+                return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+            case "long":
+                return d.toLocaleDateString("pt-BR", { day: "numeric", month: "long", year: "numeric" });
+            case "relative": {
+                const diffMs = Date.now() - d.getTime();
+                const diffSec = Math.round(diffMs / 1000);
+                const diffMin = Math.round(diffSec / 60);
+                const diffHr = Math.round(diffMin / 60);
+                const diffDay = Math.round(diffHr / 24);
+                const diffMonth = Math.round(diffDay / 30);
+                const diffYear = Math.round(diffDay / 365);
+                if (Math.abs(diffDay) < 1) return "hoje";
+                if (Math.abs(diffDay) === 1) return diffDay > 0 ? "ontem" : "amanhã";
+                if (Math.abs(diffDay) < 30) return `há ${Math.abs(diffDay)} dias`;
+                if (Math.abs(diffMonth) < 12) return `há ${Math.abs(diffMonth)} meses`;
+                return `há ${Math.abs(diffYear)} anos`;
+            }
+            default: // medium
+                return d.toLocaleDateString("pt-BR");
+        }
+    }
+
     private formatCellValue(value: any, col: IAdvancedColumn): string {
         if (value === null || value === undefined) return "–";
 
@@ -4187,6 +4638,12 @@ export class AdvancedModernTable {
                 if (typeof value !== "number") return String(value);
                 const { currency, locale } = this.parseCurrencyCode(fmt);
                 const decimals = fmt ? this.parseFormatDecimals(fmt) : 2;
+                const mode = this.config.numberScaleMode ?? "auto";
+                if (mode !== "none") {
+                    const scaled = this.scaleNumber(value, decimals);
+                    const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : "R$";
+                    return `${symbol} ${scaled}`;
+                }
                 return value.toLocaleString(locale, {
                     style: "currency", currency,
                     minimumFractionDigits: decimals,
@@ -4197,14 +4654,10 @@ export class AdvancedModernTable {
                 const n = typeof value === "number" ? value : parseFloat(String(value));
                 if (isNaN(n)) return String(value);
                 const decimals = fmt ? this.parseFormatDecimals(fmt) : 2;
-                return n.toLocaleString("pt-BR", {
-                    minimumFractionDigits: decimals,
-                    maximumFractionDigits: decimals
-                });
+                return this.scaleNumber(n, decimals);
             }
             case "percentage": {
                 if (typeof value !== "number") return String(value);
-                // Power BI stores percentages as 0–1; multiply only when needed
                 const pct = Math.abs(value) <= 1.5 ? value * 100 : value;
                 const decimals = fmt ? this.parseFormatDecimals(fmt) : 2;
                 return `${pct.toFixed(decimals)}%`;
@@ -4212,11 +4665,8 @@ export class AdvancedModernTable {
             case "date": {
                 const d = value instanceof Date ? value : new Date(value);
                 if (isNaN(d.getTime())) return String(value);
-                // Use format hint to pick date/datetime rendering
-                if (fmt && /[Hh]:mm|HH:mm/.test(fmt)) {
-                    return d.toLocaleString("pt-BR");
-                }
-                return d.toLocaleDateString("pt-BR");
+                if (fmt && /[Hh]:mm|HH:mm/.test(fmt)) return d.toLocaleString("pt-BR");
+                return this.formatDateValue(d);
             }
             case "boolean":
                 return value ? "Sim" : "Não";
