@@ -228,6 +228,23 @@ export interface IAdvancedTableConfig {
     // Table mode
     tableMode: "general" | "financial" | "matrix";
 
+    // Financial statement type (drives auto-classification)
+    financialType: "none" | "dre" | "dfc" | "balanco";
+
+    // Pre-defined dashboards (each can be toggled on/off independently)
+    dashboards: {
+        kpiSparkline: boolean;   // KPI cards + sparkline on row expand
+        variance: boolean;       // comparison / variation panel
+        miniCharts: boolean;     // inline data-bars / sparklines in numeric cells
+        topBottom: boolean;      // top / bottom ranking panel
+    };
+
+    // Auto-detect category/date hierarchies (no manual groupBy needed)
+    autoHierarchy: boolean;
+
+    // Per-row overrides keyed by first-column label (edit-mode click-to-bold etc.)
+    rowOverrides: Record<string, { bold?: boolean; level?: number; sign?: "auto" | "positive" | "negative" }>;
+
     // Filter chips toolbar
     showFilterChips: boolean;
 

@@ -50,6 +50,11 @@ export class AdvancedModernTable {
     private container: HTMLElement;
     private columns: IAdvancedColumn[] = [];
     private rows: IAdvancedRow[] = [];         // filtered + sorted
+
+    // Edit-mode interaction (used by the side-panel preview): clicking a row
+    // toggles whole-row bold and reports the row key back to the editor.
+    private editMode = false;
+    private onRowEditToggle?: (rowKey: string, row: IAdvancedRow) => void;
     private allRows: IAdvancedRow[] = [];      // original data rows
     private config: IAdvancedTableConfig;
     private conditionalFormats: IConditionalFormat[] = [];
@@ -165,6 +170,10 @@ export class AdvancedModernTable {
             enableRowSelection: false,
             enableAnalyticsCellVisuals: false,
             tableMode: "general",
+            financialType: "none",
+            dashboards: { kpiSparkline: true, variance: false, miniCharts: false, topBottom: false },
+            autoHierarchy: false,
+            rowOverrides: {},
             showFilterChips: false,
             enableRowDashboard: false,
             numberScaleMode: "auto",
@@ -361,6 +370,26 @@ export class AdvancedModernTable {
     public updateConfig(config: Partial<IAdvancedTableConfig>): void {
         this.config = { ...this.config, ...config };
         this.config.currentPage = Math.max(1, this.config.currentPage || 1);
+    }
+
+    /**
+     * Enables edit-mode interactions in the side-panel preview. While on,
+     * clicking any data row toggles its bold state and notifies the editor
+     * via the callback (keyed by the row's first-column label).
+     */
+    public setEditMode(on: boolean, onRowEditToggle?: (rowKey: string, row: IAdvancedRow) => void): void {
+        this.editMode = on;
+        this.onRowEditToggle = onRowEditToggle;
+    }
+
+    private financialRowKey(row: IAdvancedRow): string {
+        const labelCol = this.columns.find(c => c.dataType === "text") || this.columns[0];
+        const idx = labelCol ? labelCol.index : 0;
+        return String(row.values[idx] ?? row.id)
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .trim();
     }
 
     /**
@@ -678,7 +707,9 @@ export class AdvancedModernTable {
 
     private getDisplayRows(): IAdvancedRow[] {
         let data: IAdvancedRow[];
-        if (this.config.enableGrouping && this.config.groupByColumnName) {
+        const hasGrouping = (this.config.enableGrouping && this.config.groupByColumnName)
+            || (this.config.autoHierarchy === true && this.config.tableMode !== "financial");
+        if (hasGrouping && this.getGroupingSpecs().length > 0) {
             data = this.buildGroupedRows(this.rows);
         } else {
             data = [...this.rows];
@@ -732,41 +763,87 @@ export class AdvancedModernTable {
     }
 
     private buildGroupedRows(rows: IAdvancedRow[]): IAdvancedRow[] {
-        const groupingIndexes = this.getGroupingIndexes();
-        if (!groupingIndexes.length) return rows;
-        return this.buildGroupedRowsRecursive(rows, groupingIndexes, 0, []);
+        const specs = this.getGroupingSpecs();
+        if (!specs.length) return rows;
+        return this.buildGroupedRowsRecursive(rows, specs, 0, []);
     }
 
+    // Backwards-compatible: number of grouping levels currently active.
     private getGroupingIndexes(): number[] {
+        return this.getGroupingSpecs().map(s => s.index);
+    }
+
+    /**
+     * Resolves the active grouping hierarchy as a list of specs. Honours an
+     * explicit groupByColumnName; otherwise, when autoHierarchy is enabled,
+     * auto-detects category + date columns. Date columns expand into
+     * Year > Month levels.
+     */
+    private getGroupingSpecs(): Array<{ index: number; datePart?: "year" | "month" }> {
         const raw = String(this.config.groupByColumnName || "").trim();
-        if (!raw) return [];
+        const auto = this.config.autoHierarchy === true;
 
-        const names = raw
-            .split(",")
-            .map(x => x.trim())
-            .filter(Boolean);
+        const expand = (col: IAdvancedColumn): Array<{ index: number; datePart?: "year" | "month" }> => {
+            if (col.dataType === "date" && auto) {
+                return [{ index: col.index, datePart: "year" }, { index: col.index, datePart: "month" }];
+            }
+            return [{ index: col.index }];
+        };
 
-        const normalized = new Set(names.map(n => n.toLowerCase()));
+        if (raw) {
+            const normalized = new Set(raw.split(",").map(x => x.trim().toLowerCase()).filter(Boolean));
+            const specs: Array<{ index: number; datePart?: "year" | "month" }> = [];
+            this.columns
+                .filter(c => normalized.has(c.name.toLowerCase()) || normalized.has(c.displayName.toLowerCase()))
+                .forEach(c => specs.push(...expand(c)));
+            return specs;
+        }
 
-        // Keep only configured grouping columns but follow current visual order.
-        // Use column.index (data index) so grouping remains correct after drag reorder.
-        return this.columns
-            .filter(c => normalized.has(c.name.toLowerCase()) || normalized.has(c.displayName.toLowerCase()))
-            .map(c => c.index);
+        if (!auto) return [];
+
+        const dataRows = this.rows.filter(r => !r.isCalculated && r.rowType !== "group" && !r.isSubtotal);
+        const rowCount = dataRows.length || 1;
+        const specs: Array<{ index: number; datePart?: "year" | "month" }> = [];
+
+        const dateCol = this.columns.find(c => c.visible !== false && c.dataType === "date");
+        if (dateCol) specs.push({ index: dateCol.index, datePart: "year" }, { index: dateCol.index, datePart: "month" });
+
+        const candidates = this.columns
+            .filter(c => c.visible !== false && c.dataType === "text" && c.index !== (dateCol?.index ?? -1))
+            .map(c => {
+                const distinct = new Set(dataRows.map(r => String(r.values[c.index] ?? ""))).size;
+                return { col: c, distinct };
+            })
+            .filter(x => x.distinct >= 2 && x.distinct <= 40 && x.distinct <= rowCount * 0.6)
+            .sort((a, b) => a.distinct - b.distinct)
+            .slice(0, 2);
+
+        candidates.forEach(x => specs.push({ index: x.col.index }));
+        return specs;
+    }
+
+    private groupKeyForValue(value: any, datePart?: "year" | "month"): string {
+        if (!datePart) return String(value ?? "(vazio)");
+        const d = value instanceof Date ? value : new Date(value);
+        if (isNaN(d.getTime())) return String(value ?? "(vazio)");
+        if (datePart === "year") return String(d.getFullYear());
+        const months = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+        return `${months[d.getMonth()]}/${d.getFullYear()}`;
     }
 
     private buildGroupedRowsRecursive(
         rows: IAdvancedRow[],
-        groupingIndexes: number[],
+        groupingSpecs: Array<{ index: number; datePart?: "year" | "month" }>,
         level: number,
         parentPath: string[]
     ): IAdvancedRow[] {
-        if (!rows.length || level >= groupingIndexes.length) return rows;
+        if (!rows.length || level >= groupingSpecs.length) return rows;
 
-        const groupIndex = groupingIndexes[level];
+        const spec = groupingSpecs[level];
+        const groupIndex = spec.index;
         const grouped = new Map<string, IAdvancedRow[]>();
         rows.forEach(r => {
-            const key = String(r.values[groupIndex] ?? "(vazio)");
+            const key = this.groupKeyForValue(r.values[groupIndex], spec.datePart);
             if (!grouped.has(key)) grouped.set(key, []);
             grouped.get(key)!.push(r);
         });
@@ -795,11 +872,11 @@ export class AdvancedModernTable {
 
             if (!isExpanded) return;
 
-            const isLeaf = level >= groupingIndexes.length - 1;
+            const isLeaf = level >= groupingSpecs.length - 1;
             if (isLeaf) {
                 result.push(...groupRows);
             } else {
-                result.push(...this.buildGroupedRowsRecursive(groupRows, groupingIndexes, level + 1, path));
+                result.push(...this.buildGroupedRowsRecursive(groupRows, groupingSpecs, level + 1, path));
             }
 
             if (this.config.enableCalculatedRows) {
@@ -1138,13 +1215,15 @@ export class AdvancedModernTable {
         const inner = document.createElement("div");
         inner.className = "mt-dashboard-inner";
 
+        const dash = this.config.dashboards || { kpiSparkline: true, variance: false, miniCharts: false, topBottom: false };
+
         // Metrics section
         const numericCols = this.getRenderableColumns().filter(c =>
             (c.dataType === "number" || c.dataType === "currency" || c.dataType === "percentage")
             && typeof row.values[c.index] === "number"
         );
 
-        if (numericCols.length > 0) {
+        if (dash.kpiSparkline !== false && numericCols.length > 0) {
             const metricsSection = document.createElement("div");
             metricsSection.className = "mt-dashboard-metrics";
 
@@ -1196,7 +1275,7 @@ export class AdvancedModernTable {
 
         // Sparkline section using all numeric columns as data points
         const sparkData = numericCols.slice(0, 24).map(c => row.values[c.index] as number).filter(v => !isNaN(v));
-        if (sparkData.length >= 2) {
+        if (dash.kpiSparkline !== false && sparkData.length >= 2) {
             const sparkSection = document.createElement("div");
             sparkSection.className = "mt-dashboard-sparkline-section";
 
@@ -1232,6 +1311,79 @@ export class AdvancedModernTable {
                 userSection.appendChild(item);
             });
             inner.appendChild(userSection);
+        }
+
+        // Variation / comparison panel — % change between consecutive numeric columns
+        if (dash.variance && numericCols.length >= 2) {
+            const section = document.createElement("div");
+            section.className = "mt-dashboard-variance-section";
+            const title = document.createElement("div");
+            title.className = "mt-dashboard-section-title";
+            title.textContent = "Variação";
+            section.appendChild(title);
+
+            const cards = document.createElement("div");
+            cards.className = "mt-dashboard-cards";
+            for (let i = 1; i < Math.min(numericCols.length, 7); i += 1) {
+                const prev = row.values[numericCols[i - 1].index] as number;
+                const cur = row.values[numericCols[i].index] as number;
+                if (typeof prev !== "number" || typeof cur !== "number" || prev === 0) continue;
+                const pct = ((cur - prev) / Math.abs(prev)) * 100;
+                const up = pct >= 0;
+                const card = document.createElement("div");
+                card.className = "mt-dashboard-card";
+                const label = document.createElement("span");
+                label.className = "mt-dashboard-card-label";
+                label.textContent = `${numericCols[i - 1].displayName} → ${numericCols[i].displayName}`;
+                const valEl = document.createElement("span");
+                valEl.className = "mt-dashboard-card-value";
+                valEl.textContent = `${up ? "▲" : "▼"} ${pct.toFixed(1)}%`;
+                valEl.style.color = up
+                    ? (this.config.financialPositiveColor || "#16a34a")
+                    : (this.config.financialNegativeColor || "#dc2626");
+                card.appendChild(label);
+                card.appendChild(valEl);
+                cards.appendChild(card);
+            }
+            if (cards.childElementCount > 0) {
+                section.appendChild(cards);
+                inner.appendChild(section);
+            }
+        }
+
+        // Top / Bottom ranking panel — highest & lowest numeric column for this row
+        if (dash.topBottom && numericCols.length >= 2) {
+            const ranked = numericCols
+                .map(c => ({ name: c.displayName, val: row.values[c.index] as number, col: c }))
+                .filter(x => typeof x.val === "number" && !isNaN(x.val))
+                .sort((a, b) => b.val - a.val);
+            if (ranked.length >= 2) {
+                const section = document.createElement("div");
+                section.className = "mt-dashboard-topbottom-section";
+                const title = document.createElement("div");
+                title.className = "mt-dashboard-section-title";
+                title.textContent = "Maiores / Menores";
+                section.appendChild(title);
+                const cards = document.createElement("div");
+                cards.className = "mt-dashboard-cards";
+                const mk = (lbl: string, item: { name: string; val: number; col: IAdvancedColumn }, color: string) => {
+                    const card = document.createElement("div");
+                    card.className = "mt-dashboard-card";
+                    const l = document.createElement("span");
+                    l.className = "mt-dashboard-card-label";
+                    l.textContent = `${lbl}: ${item.name}`;
+                    const v = document.createElement("span");
+                    v.className = "mt-dashboard-card-value";
+                    v.textContent = this.formatCellValue(item.val, item.col);
+                    v.style.color = color;
+                    card.appendChild(l); card.appendChild(v);
+                    return card;
+                };
+                cards.appendChild(mk("Top", ranked[0], this.config.financialPositiveColor || "#16a34a"));
+                cards.appendChild(mk("Bottom", ranked[ranked.length - 1], this.config.financialNegativeColor || "#dc2626"));
+                section.appendChild(cards);
+                inner.appendChild(section);
+            }
         }
 
         panel.appendChild(inner);
@@ -2207,8 +2359,17 @@ export class AdvancedModernTable {
             });
         }
 
+        // Edit-mode: click row to toggle whole-row bold (financial styling)
+        if (this.editMode && row.rowType !== "group") {
+            tr.classList.add("mt-tr-editable");
+            tr.style.cursor = "pointer";
+            tr.addEventListener("click", () => {
+                if (this.onRowEditToggle) this.onRowEditToggle(this.financialRowKey(row), row);
+            });
+        }
+
         // Row selection click
-        if (this.config.enableRowSelection && row.rowType !== "group") {
+        if (this.config.enableRowSelection && !this.editMode && row.rowType !== "group") {
             tr.addEventListener("click", (e: MouseEvent) => {
                 const multi = e.ctrlKey || e.shiftKey || (e as any).metaKey;
                 const selId = this.rowSelectionIds.get(row.id);
@@ -2436,6 +2597,11 @@ export class AdvancedModernTable {
                     td.appendChild(badge);
                 } else {
                     td.textContent = formatted;
+                    if (this.config.tableMode === "financial" && (row as any).__financialNegative
+                        && (col.dataType === "number" || col.dataType === "currency" || col.dataType === "percentage")
+                        && typeof value === "number") {
+                        td.style.color = this.config.financialNegativeColor || "#dc2626";
+                    }
                 }
             }
 

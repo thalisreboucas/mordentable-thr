@@ -3176,6 +3176,100 @@
     svg { color: #0284c7; }
 }
 
+/* -- Segmented control (financial type) ------------------------------------- */
+.mte-seg {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-top: 4px;
+}
+.mte-seg-btn {
+    padding: 8px 6px;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 8px;
+    background: #ffffff;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+    transition: all 130ms;
+    &:hover { border-color: #94a3b8; }
+}
+.mte-seg-btn.mte-seg-active {
+    border-color: #0284c7;
+    background: #0284c7;
+    color: #ffffff;
+    box-shadow: 0 1px 3px rgba(2,132,199,0.3);
+}
+
+/* -- Hints ------------------------------------------------------------------ */
+.mte-hint {
+    margin-top: 10px;
+    padding: 9px 11px;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 8px;
+    font-size: 11px;
+    color: #075985;
+    line-height: 1.4;
+    strong { color: #0c4a6e; }
+}
+.mte-hidden { display: none; }
+
+/* small helper text inside toggle labels */
+.mte-field-toggle span small {
+    display: block;
+    font-size: 10px;
+    font-weight: 400;
+    color: #94a3b8;
+    margin-top: 1px;
+}
+
+/* -- Dashboard cards (on/off) ----------------------------------------------- */
+.mte-dash-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+.mte-dash-card {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 8px;
+    background: #ffffff;
+    cursor: pointer;
+    transition: border-color 130ms, box-shadow 130ms;
+    div { display: flex; flex-direction: column; gap: 2px; }
+    strong { font-size: 12px; font-weight: 700; color: #0f172a; }
+    span { font-size: 10.5px; color: #6b7280; line-height: 1.3; }
+    &:hover { border-color: #94a3b8; }
+    &.mte-selected {
+        border-color: #0284c7;
+        box-shadow: 0 0 0 2px rgba(2,132,199,0.10);
+        background: #f8fbff;
+    }
+}
+
+/* -- Edit-mode clickable rows (preview) ------------------------------------- */
+.mt-tr-editable {
+    cursor: pointer;
+    transition: box-shadow 120ms;
+    &:hover {
+        box-shadow: inset 3px 0 0 #0284c7;
+    }
+}
+
+/* -- Dashboard variance / top-bottom sections ------------------------------- */
+.mt-dashboard-variance-section,
+.mt-dashboard-topbottom-section {
+    margin-top: 10px;
+}
+
 /* -- Field grid ------------------------------------------------------------- */
 .mte-field-grid {
     display: flex;

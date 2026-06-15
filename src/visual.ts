@@ -16,6 +16,7 @@ import { AdvancedModernTable } from "./advanced-table";
 import { IAdvancedColumn, IAdvancedRow, IAdvancedTableConfig } from "./types";
 import { VisualEditor, IEditorConfig, defaultEditorConfig } from "./visual-editor";
 import { buildCalculatedRows } from "./formula-engine";
+import { classifyFinancialRows, applyCalculatedColumns } from "./financial";
 
 import EditMode = powerbi.EditMode;
 
@@ -157,10 +158,10 @@ export class Visual implements IVisual {
                 totalsStyleConfig
             );
 
-            const finalColumns = this.applyEditorColumnOverrides(extracted.columns);
-            const finalRows    = this.applyEditorCalculatedRows(finalColumns, extracted.rows);
+            const merged = this.mergeEditorConfig(config);
+            const { columns: finalColumns, rows: finalRows } = this.buildFinalData(extracted.columns, extracted.rows);
 
-            this.table.updateConfig(config);
+            this.table.updateConfig(merged);
             this.table.setColumns(finalColumns);
             this.table.setData(finalRows);
             this.table.render();
@@ -232,9 +233,7 @@ export class Visual implements IVisual {
         if (options.viewport) this.table.setViewport(options.viewport.width * 0.58, options.viewport.height);
 
         const refreshPreview = () => {
-            const finalColumns = this.applyEditorColumnOverrides(this.lastExtracted.columns);
-            const finalRows    = this.applyEditorCalculatedRows(finalColumns, this.lastExtracted.rows);
-            const config       = this.buildTableConfig(
+            const config = this.buildTableConfig(
                 this.formattingSettings?.columnsIconsCard,
                 this.formattingSettings?.tableFeaturesCard,
                 this.formattingSettings?.tableModeCard,
@@ -247,9 +246,19 @@ export class Visual implements IVisual {
                 this.formattingSettings?.groupingStyleCard,
                 this.formattingSettings?.totalsStyleCard
             );
-            this.table.updateConfig(config);
+            const merged = this.mergeEditorConfig(config);
+            const { columns: finalColumns, rows: finalRows } = this.buildFinalData(this.lastExtracted.columns, this.lastExtracted.rows);
+            this.table.updateConfig(merged);
             this.table.setColumns(finalColumns);
             this.table.setData(finalRows);
+            this.table.setEditMode(true, (rowKey) => {
+                if (!this.editorConfig.rowOverrides) this.editorConfig.rowOverrides = {};
+                const cur = this.editorConfig.rowOverrides[rowKey] || {};
+                cur.bold = !cur.bold;
+                this.editorConfig.rowOverrides[rowKey] = cur;
+                this.saveEditorConfig(this.editorConfig);
+                refreshPreview();
+            });
             this.table.render();
         };
         refreshPreview();
@@ -282,9 +291,58 @@ export class Visual implements IVisual {
     private loadEditorConfig(dataView: DataView): IEditorConfig {
         const raw = (dataView as any)?.metadata?.objects?.editorState?.configJson;
         if (typeof raw === "string" && raw.length > 0) {
-            try { return { ...defaultEditorConfig(), ...JSON.parse(raw) }; } catch { /* fall through */ }
+            try { return this.migrateEditorConfig(JSON.parse(raw)); } catch { /* fall through */ }
         }
         return defaultEditorConfig();
+    }
+
+    /** Merge persisted config with defaults and migrate the legacy tableMode field. */
+    private migrateEditorConfig(parsed: any): IEditorConfig {
+        const cfg: IEditorConfig = { ...defaultEditorConfig(), ...parsed };
+        if (parsed && parsed.financialType === undefined && parsed.tableMode) {
+            cfg.financialType = parsed.tableMode === "financial" ? "dre" : "none";
+        }
+        if (!cfg.dashboards) cfg.dashboards = { kpiSparkline: true, variance: false, miniCharts: false, topBottom: false };
+        if (!cfg.rowOverrides) cfg.rowOverrides = {};
+        if (!cfg.calculatedColumns) cfg.calculatedColumns = [];
+        return cfg;
+    }
+
+    /** Overlays editor-panel settings on top of the formatting-pane config. */
+    private mergeEditorConfig(config: Partial<IAdvancedTableConfig>): Partial<IAdvancedTableConfig> {
+        const ec = this.editorConfig;
+        const fin = ec.financialType || "none";
+        return {
+            ...config,
+            tableMode: fin !== "none" ? "financial" : config.tableMode,
+            financialType: fin,
+            autoHierarchy: ec.autoHierarchy === true,
+            enableRowDashboard: ec.enableRowDashboard === true,
+            dashboards: ec.dashboards || config.dashboards,
+            rowOverrides: ec.rowOverrides || {},
+            numberScaleMode: ec.numberScaleMode || config.numberScaleMode,
+            dateDisplayFormat: ec.dateDisplayFormat || config.dateDisplayFormat,
+            showFilterChips: ec.showFilterChips === true || config.showFilterChips,
+            enableAnalyticsCellVisuals: ec.dashboards?.miniCharts === true || config.enableAnalyticsCellVisuals,
+        };
+    }
+
+    /** Applies calculated columns + financial classification to the rendered data. */
+    private buildFinalData(columns: IAdvancedColumn[], rows: IAdvancedRow[]): { columns: IAdvancedColumn[]; rows: IAdvancedRow[] } {
+        let finalColumns = this.applyEditorColumnOverrides(columns);
+        let finalRows = this.applyEditorCalculatedRows(finalColumns, rows);
+
+        const calc = applyCalculatedColumns(this.editorConfig.calculatedColumns || [], finalColumns, finalRows);
+        finalColumns = calc.columns;
+        finalRows = calc.rows;
+
+        finalRows = classifyFinancialRows(
+            finalRows,
+            finalColumns,
+            this.editorConfig.financialType || "none",
+            this.editorConfig.rowOverrides || {}
+        );
+        return { columns: finalColumns, rows: finalRows };
     }
 
     private saveEditorConfig(cfg: IEditorConfig): void {
@@ -566,6 +624,10 @@ export class Visual implements IVisual {
                 const raw = this.getEnumSelectionValue(tableModeConfig?.tableMode?.value, "general");
                 return (["general", "financial", "matrix"].includes(raw) ? raw : "general") as IAdvancedTableConfig["tableMode"];
             })(),
+            financialType: "none",
+            dashboards: { kpiSparkline: true, variance: false, miniCharts: false, topBottom: false },
+            autoHierarchy: false,
+            rowOverrides: {},
             showFilterChips: tableModeConfig?.showFilterChips?.value === true,
             enableRowDashboard: tableModeConfig?.enableRowDashboard?.value === true,
             financialTabs: (() => {

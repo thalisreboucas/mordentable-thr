@@ -28,6 +28,19 @@ export interface IEditorColumnOverride {
     numberFormat?: string;
 }
 
+export interface IEditorCalculatedColumnDef {
+    id: string;
+    name: string;
+    formula: string;
+    numberFormat?: "number" | "currency" | "percentage";
+}
+
+export interface IEditorRowOverride {
+    bold?: boolean;
+    level?: number;
+    sign?: "auto" | "positive" | "negative";
+}
+
 export interface IEditorConditionalRule {
     id: string;
     column: string;
@@ -37,26 +50,45 @@ export interface IEditorConditionalRule {
     textColor: string;
 }
 
+export interface IEditorDashboards {
+    kpiSparkline: boolean;
+    variance: boolean;
+    miniCharts: boolean;
+    topBottom: boolean;
+}
+
 export interface IEditorConfig {
-    tableMode: "general" | "financial" | "matrix";
+    // Base view is always Grid / Matrix / Pivot. Financial statement type
+    // (when not "none") switches the table into financial rendering.
+    financialType: "none" | "dre" | "dfc" | "balanco";
+    autoHierarchy: boolean;
     numberScaleMode: "auto" | "none" | "K" | "M" | "B";
     dateDisplayFormat: "short" | "medium" | "long" | "relative";
     showFilterChips: boolean;
     enableRowDashboard: boolean;
+    dashboards: IEditorDashboards;
     calculatedRows: IEditorCalculatedRowDef[];
+    calculatedColumns: IEditorCalculatedColumnDef[];
     columnOverrides: Record<string, IEditorColumnOverride>;
+    rowOverrides: Record<string, IEditorRowOverride>;
     conditionalRules: IEditorConditionalRule[];
+    // Legacy (migrated on load) — kept optional for backward compatibility.
+    tableMode?: "general" | "financial" | "matrix";
 }
 
 export function defaultEditorConfig(): IEditorConfig {
     return {
-        tableMode: "general",
+        financialType: "none",
+        autoHierarchy: true,
         numberScaleMode: "auto",
         dateDisplayFormat: "medium",
         showFilterChips: false,
         enableRowDashboard: false,
+        dashboards: { kpiSparkline: true, variance: false, miniCharts: false, topBottom: false },
         calculatedRows: [],
+        calculatedColumns: [],
         columnOverrides: {},
+        rowOverrides: {},
         conditionalRules: [],
     };
 }
@@ -181,20 +213,72 @@ export class VisualEditor {
     // ── Tab: Modo ─────────────────────────────────────────────────────────────
 
     private tabMode(content: HTMLElement): void {
+        const fin = this.config.financialType || "none";
+        const dash = this.config.dashboards || { kpiSparkline: true, variance: false, miniCharts: false, topBottom: false };
+
+        const finOptions = [
+            { v: "none",    name: "Nenhum",  desc: "Tabela padrão (grid / pivot)." },
+            { v: "dre",     name: "DRE",     desc: "Demonstração do Resultado." },
+            { v: "dfc",     name: "DFC",     desc: "Fluxo de Caixa." },
+            { v: "balanco", name: "Balanço", desc: "Balanço Patrimonial." },
+        ];
+
+        const dashOptions = [
+            { k: "kpiSparkline", name: "KPIs + Sparkline", desc: "Cartões de métricas e mini-gráfico de tendência ao expandir a linha." },
+            { k: "variance",     name: "Comparativo / Variação", desc: "Variação % entre colunas com setas de tendência." },
+            { k: "miniCharts",   name: "Mini-gráficos nas células", desc: "Barras e sparklines embutidos nas células numéricas." },
+            { k: "topBottom",    name: "Top / Bottom & Ranking", desc: "Destaque dos maiores e menores valores da linha." },
+        ];
+
         content.innerHTML = `
         <div class="mte-section">
-            <h2>Modo da Tabela</h2>
-            <p>Selecione como os dados serão organizados e exibidos.</p>
+            <h2>Modo & Hierarquia</h2>
+            <p>Visualização base unificada com detecção automática de hierarquia.</p>
             <div class="mte-mode-grid">
-                ${[
-                    { v: "general",   icon: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>', name: "Grid / Matrix", desc: "Tabela comparativa para rankings, competidores e análises multi-dimensionais." },
-                    { v: "financial", icon: '<path d="M12 2v20M17 5H9.5a3.5 3.5 0 1 0 0 7h5a3.5 3.5 0 1 1 0 7H6"/>',                   name: "Financeiro (DRE / P&L)", desc: "Hierarquia de contas, indentação por nível e cores de variação." },
-                    { v: "matrix",    icon: '<path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/>',                          name: "Matriz (Pivot)", desc: "Pivotamento com grupos no cabeçalho e mini-gráficos integrados." },
-                ].map(m => `
-                    <label class="mte-mode-card ${this.config.tableMode === m.v ? "mte-selected" : ""}">
-                        <input type="radio" name="tm" value="${m.v}" ${this.config.tableMode === m.v ? "checked" : ""}>
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">${m.icon}</svg>
-                        <div><strong>${m.name}</strong><span>${m.desc}</span></div>
+                <label class="mte-mode-card mte-selected">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></svg>
+                    <div><strong>Grid / Matriz / Pivot</strong><span>Tabela comparativa, agrupamento e mini-gráficos integrados.</span></div>
+                </label>
+            </div>
+            <label class="mte-field mte-field-toggle" style="margin-top:12px">
+                <span>Detectar hierarquia automaticamente<small>Agrupa categorias e datas (Ano ▸ Mês) sem configuração.</small></span>
+                <label class="mte-toggle-wrap">
+                    <input type="checkbox" data-bind="autoHierarchy" ${this.config.autoHierarchy ? "checked" : ""}>
+                    <span class="mte-toggle-slider"></span>
+                </label>
+            </label>
+        </div>
+
+        <div class="mte-section">
+            <h2>Demonstrativo Financeiro</h2>
+            <p>Classifica as linhas automaticamente por tipo de conta.</p>
+            <div class="mte-seg">
+                ${finOptions.map(o => `
+                    <button type="button" class="mte-seg-btn ${fin === o.v ? "mte-seg-active" : ""}" data-fin="${o.v}" title="${o.desc}">${o.name}</button>
+                `).join("")}
+            </div>
+            <div class="mte-hint ${fin === "none" ? "mte-hidden" : ""}" id="mte-fin-hint">
+                Linhas classificadas e indentadas automaticamente. <strong>Clique em qualquer linha na pré-visualização</strong> para alternar o negrito.
+            </div>
+        </div>
+
+        <div class="mte-section">
+            <h2>Dashboards pré-definidos</h2>
+            <label class="mte-field mte-field-toggle">
+                <span>Habilitar dashboard por linha<small>Mostra o botão de expandir em cada linha.</small></span>
+                <label class="mte-toggle-wrap">
+                    <input type="checkbox" data-bind="enableRowDashboard" ${this.config.enableRowDashboard ? "checked" : ""}>
+                    <span class="mte-toggle-slider"></span>
+                </label>
+            </label>
+            <div class="mte-dash-list">
+                ${dashOptions.map(o => `
+                    <label class="mte-dash-card ${(dash as any)[o.k] ? "mte-selected" : ""}">
+                        <div><strong>${o.name}</strong><span>${o.desc}</span></div>
+                        <label class="mte-toggle-wrap">
+                            <input type="checkbox" data-dash="${o.k}" ${(dash as any)[o.k] ? "checked" : ""}>
+                            <span class="mte-toggle-slider"></span>
+                        </label>
                     </label>
                 `).join("")}
             </div>
@@ -229,27 +313,27 @@ export class VisualEditor {
                         <span class="mte-toggle-slider"></span>
                     </label>
                 </label>
-                <label class="mte-field mte-field-toggle">
-                    <span>Dashboard por linha</span>
-                    <label class="mte-toggle-wrap">
-                        <input type="checkbox" data-bind="enableRowDashboard" ${this.config.enableRowDashboard ? "checked" : ""}>
-                        <span class="mte-toggle-slider"></span>
-                    </label>
-                </label>
             </div>
         </div>
         `;
 
-        // Wire radio buttons
-        content.querySelectorAll<HTMLInputElement>('input[name="tm"]').forEach(radio => {
-            radio.addEventListener("change", () => {
-                this.config.tableMode = radio.value as IEditorConfig["tableMode"];
-                content.querySelectorAll(".mte-mode-card").forEach(c => c.classList.remove("mte-selected"));
-                radio.closest(".mte-mode-card")?.classList.add("mte-selected");
+        content.querySelectorAll<HTMLButtonElement>("[data-fin]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                this.config.financialType = btn.dataset.fin as IEditorConfig["financialType"];
+                content.querySelectorAll(".mte-seg-btn").forEach(b => b.classList.remove("mte-seg-active"));
+                btn.classList.add("mte-seg-active");
+                content.querySelector("#mte-fin-hint")?.classList.toggle("mte-hidden", this.config.financialType === "none");
             });
         });
 
-        // Wire selects
+        content.querySelectorAll<HTMLInputElement>("input[data-dash]").forEach(cb => {
+            cb.addEventListener("change", () => {
+                if (!this.config.dashboards) this.config.dashboards = { kpiSparkline: true, variance: false, miniCharts: false, topBottom: false };
+                (this.config.dashboards as any)[cb.dataset.dash!] = cb.checked;
+                cb.closest(".mte-dash-card")?.classList.toggle("mte-selected", cb.checked);
+            });
+        });
+
         content.querySelectorAll<HTMLSelectElement>("select[data-bind]").forEach(sel => {
             sel.value = (this.config as any)[sel.dataset.bind!] ?? "";
             sel.addEventListener("change", () => {
@@ -257,13 +341,13 @@ export class VisualEditor {
             });
         });
 
-        // Wire checkboxes
         content.querySelectorAll<HTMLInputElement>("input[type=checkbox][data-bind]").forEach(cb => {
             cb.addEventListener("change", () => {
                 (this.config as any)[cb.dataset.bind!] = cb.checked;
             });
         });
     }
+
 
     // ── Tab: Colunas ──────────────────────────────────────────────────────────
 
@@ -324,6 +408,94 @@ export class VisualEditor {
                 });
             });
         });
+
+        // Calculated columns section (inline, at the bottom of the columns list)
+        this.buildCalcColumnsSection(content);
+    }
+
+    private buildCalcColumnsSection(content: HTMLElement): void {
+        if (!this.config.calculatedColumns) this.config.calculatedColumns = [];
+        const section = document.createElement("div");
+        section.className = "mte-section";
+        section.appendChild(this.calcColumnsInner());
+        content.appendChild(section);
+    }
+
+    private calcColumnsInner(): HTMLElement {
+        const wrap = document.createElement("div");
+        const colTokens = this.columns.map(c => `<code>[${c.displayName}]</code>`).join(" ");
+        wrap.innerHTML = `
+            <h2>Colunas Calculadas</h2>
+            <p>Crie colunas a partir de fórmulas entre colunas existentes.</p>
+            <div class="mte-syntax-box">
+                <strong>Exemplos:</strong>
+                <code>=[Receita]-[Custo]</code>
+                <code>=[Lucro]/[Receita]*100</code>
+                <code>=([A]+[B])/2</code>
+                ${this.columns.length ? `<div class="mte-formula-hint" style="margin-top:6px">Colunas: ${colTokens}</div>` : ""}
+            </div>
+        `;
+
+        (this.config.calculatedColumns || []).forEach((def, idx) => {
+            wrap.appendChild(this.buildCalcColumnItem(def, idx));
+        });
+
+        const addBtn = document.createElement("button");
+        addBtn.className = "mte-btn mte-btn-add";
+        addBtn.innerHTML = ICO.plus + " Adicionar Coluna Calculada";
+        addBtn.addEventListener("click", () => {
+            this.config.calculatedColumns.push({
+                id: `c${Date.now().toString(36)}`,
+                name: `Coluna ${this.config.calculatedColumns.length + 1}`,
+                formula: "",
+                numberFormat: "number",
+            });
+            this.refreshCalcColumns(wrap);
+        });
+        wrap.appendChild(addBtn);
+        return wrap;
+    }
+
+    private refreshCalcColumns(wrap: HTMLElement): void {
+        const fresh = this.calcColumnsInner();
+        wrap.replaceWith(fresh);
+    }
+
+    private buildCalcColumnItem(def: IEditorCalculatedColumnDef, idx: number): HTMLElement {
+        const item = document.createElement("div");
+        item.className = "mte-calc-item";
+        item.innerHTML = `
+            <div class="mte-calc-header">
+                <input type="text" class="mte-inp mte-calc-label" value="${def.name}" placeholder="Nome da coluna" data-key="name">
+                <select class="mte-sel-sm" data-key="numberFormat">
+                    <option value="number"     ${def.numberFormat === "number"     ? "selected" : ""}>Número</option>
+                    <option value="currency"   ${def.numberFormat === "currency"   ? "selected" : ""}>Moeda</option>
+                    <option value="percentage" ${def.numberFormat === "percentage" ? "selected" : ""}>Percentual</option>
+                </select>
+                <button class="mte-btn-icon mte-calc-del" title="Remover">${ICO.trash}</button>
+            </div>
+            <label class="mte-formula-row" style="margin-top:8px">
+                <span>Fórmula</span>
+                <input type="text" class="mte-inp mte-inp-formula" data-key="formula" value="${(def.formula || "").replace(/"/g, "&quot;")}" placeholder="=[Receita]-[Custo]">
+            </label>
+        `;
+
+        item.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-key]").forEach(el => {
+            el.addEventListener("change", () => {
+                (this.config.calculatedColumns[idx] as any)[(el as HTMLElement).dataset.key!] = (el as HTMLInputElement).value;
+            });
+        });
+
+        item.querySelector(".mte-calc-del")!.addEventListener("click", () => {
+            this.config.calculatedColumns.splice(idx, 1);
+            const parent = item.closest(".mte-section");
+            if (parent) {
+                const wrap = parent.firstElementChild as HTMLElement;
+                this.refreshCalcColumns(wrap);
+            }
+        });
+
+        return item;
     }
 
     // ── Tab: Linhas Calculadas ────────────────────────────────────────────────
